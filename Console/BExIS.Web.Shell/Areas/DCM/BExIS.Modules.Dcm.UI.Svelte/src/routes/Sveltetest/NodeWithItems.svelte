@@ -135,22 +135,21 @@
   // check if handle can accept new input connections
   function isHandleTargetable(itemId: string, _item: any): boolean {
     const handleId = `${id}-${itemId}-handle`;
-    // get variable info 
-    const variable = (data?.componentVariables || []).find((v: any) => `${id}-${v.target_variable}-handle` === handleId) 
-                     || _item;
+    const variable = (data?.componentVariables || []).find((v: any) => `${id}-${v.target_variable}-handle` === handleId) || _item;
+    
+    if (!variable?.is_input) return true; // not input > can connect
+    if (!edges || edges.length === 0) return true; // no edges > can connect
 
-    if (!variable?.is_input) return true; // nur Inputs beschränken
-    if (!edges || edges.length === 0) return true;
+    const currentInteractionMode = data?.interactionMode;
 
-    // only input from variables count as valid connections
     const hasInputAlready = edges.some((edge: any) => {
-      const isIncomingToThisHandle = edge.targetHandle === handleId;
-      const isFromParam = edge.source?.startsWith('param-');
-      const hasInputFlow =
-        edge.data?.rightDirection === true ||
-        (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
+      const isOutgoingFromThisHandle = edge.sourceHandle === handleId;
+      const isToSchema = edge.target?.startsWith('schema-') || edge.target?.startsWith('param-');
+      const hasInputFlow = edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
+      const edgeSourceMode = edge.data?.sourceMode;
+      const isSameMode = edgeSourceMode === currentInteractionMode;
 
-      return isIncomingToThisHandle && isFromParam && hasInputFlow;
+      return isOutgoingFromThisHandle && isToSchema && hasInputFlow && isSameMode;
     });
 
     return !hasInputAlready;

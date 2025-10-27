@@ -260,27 +260,27 @@
     const currentEdges = get(edges);
     const currentNodes = get(nodes);
     
-    console.log('=== filtering edges for interaction mode ===');
-    console.log('current mode:', currentInteractionMode);
-    console.log('edges before filter:', currentEdges.length);
+    // console.log('=== filtering edges for interaction mode ===');
+    // console.log('current mode:', currentInteractionMode);
+    // console.log('edges before filter:', currentEdges.length);
     
     const filteredEdges = currentEdges.filter(edge => {
 
       const sourceNode = currentNodes.find(n => n.id === edge.source);
       const targetNode = currentNodes.find(n => n.id === edge.target);
+      const sourceIsComponent = sourceNode?.id?.startsWith('config-component-') || sourceNode?.id?.startsWith('library-component-');
+      const targetIsComponent = targetNode?.id?.startsWith('config-component-') || targetNode?.id?.startsWith('library-component-');
 
-      if (sourceNode?.id?.startsWith('config-component-')) {
-        const nodeInteractionMode = sourceNode.data?.interactionMode;
+      if (sourceIsComponent) {
+        const nodeInteractionMode = sourceNode?.data?.interactionMode;
         if (nodeInteractionMode && nodeInteractionMode !== currentInteractionMode) {
-          console.log('filtering out edge - source node mode mismatch:', edge.id);
           return false;
         }
       }
 
-      if (targetNode?.id?.startsWith('config-component-')) {
-        const nodeInteractionMode = targetNode.data?.interactionMode;
+      if (targetIsComponent) {
+        const nodeInteractionMode = targetNode?.data?.interactionMode;
         if (nodeInteractionMode && nodeInteractionMode !== currentInteractionMode) {
-          console.log('filtering out edge - target node mode mismatch:', edge.id);
           return false;
         }
       }
@@ -288,7 +288,7 @@
       return true;
     });
     
-    console.log('edges after filter:', filteredEdges.length);
+    // console.log('edges after filter:', filteredEdges.length);
     edges.set(filteredEdges);
   }
 
@@ -723,33 +723,44 @@
     activeTab = 0;
   }
 
-  // fix handle targeting check - input restriction
+  // check if connection is valid before allowing
   function isValidConnection(connection: any) {
     if (!connection) return true;
     
-    console.log('=== isvalidconnection check ===');
-    console.log('connection:', connection);
+    // console.log('=== isvalidconnection check ===');
+    // console.log('connection:', connection);
     
     // check input restriction
-    if (connection.targetHandle && connection.targetHandle.includes('-handle')) {
+    if (connection.sourceHandle && connection.sourceHandle.includes('-handle')) {
       const currentEdges = get(edges);
+      const currentNodes = get(nodes);
       const initialDirection = determineInitialDirection(connection.sourceHandle, connection.targetHandle);
       
-      if (Array.isArray(currentEdges)) {
-        // check if new edge would be input
-        const newEdgeWouldHaveInput = initialDirection.rightDirection || 
-          (initialDirection.leftDirection && initialDirection.rightDirection);
+      const sourceNode = currentNodes.find(n => connection.sourceHandle.startsWith(n.id + '-'));
+      const isComponentNode = sourceNode?.type === 'nodeWithItems' || sourceNode?.id?.startsWith('config-component-') || sourceNode?.id?.startsWith('library-component-');
+      
+      // check flow direction for components
+      if (isComponentNode && Array.isArray(currentEdges)) {
+        const newEdgeWouldHaveInput = initialDirection.rightDirection || (initialDirection.leftDirection && initialDirection.rightDirection);
         
         if (newEdgeWouldHaveInput) {
+          const sourceNodeMode = sourceNode?.data?.interactionMode;
+          
           // check all existing input connections
-          const existingInputConnections = currentEdges.filter(edge => 
-            edge.targetHandle === connection.targetHandle && 
-            (edge.data?.rightDirection === true || 
-             (edge.data?.leftDirection === true && edge.data?.rightDirection === true))
-          );
+          const existingInputConnections = currentEdges.filter(edge => {
+            if (edge.sourceHandle !== connection.sourceHandle) return false;
+            
+            const hasInputFlow = edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
+            if (!hasInputFlow) return false;
+            
+            const edgeSourceNode = currentNodes.find(n => edge.sourceHandle?.startsWith(n.id + '-'));
+            const edgeSourceNodeMode = edgeSourceNode?.data?.interactionMode;
+            
+            return edgeSourceNodeMode === sourceNodeMode;
+          });
           
           if (existingInputConnections.length > 0) {
-            console.log('target already has input connection, blocking');
+            //console.log('target already has input connection, blocking');
             return false;
           }
         }
@@ -762,27 +773,37 @@
   function onConnect(params: any) {
     if (!params) return;
     
-    console.log('=== onconnect called ===');
-    console.log('connection params:', params);
+    // console.log('=== onconnect called ===');
+    // console.log('connection params:', params);
     
     // input restriction validation
-    if (params.targetHandle && params.targetHandle.includes('-handle')) {
+    if (params.sourceHandle && params.sourceHandle.includes('-handle')) {
       const currentEdges = get(edges);
+      const currentNodes = get(nodes);
       const initialDirection = determineInitialDirection(params.sourceHandle, params.targetHandle);
+      const sourceNode = currentNodes.find(n => params.sourceHandle.startsWith(n.id + '-'));
       
-      if (Array.isArray(currentEdges)) {
-        const newEdgeWouldHaveInput = initialDirection.rightDirection || 
-          (initialDirection.leftDirection && initialDirection.rightDirection);
+      const isComponentNode = sourceNode?.type === 'nodeWithItems' || sourceNode?.id?.startsWith('config-component-') || sourceNode?.id?.startsWith('library-component-');
+      // check flow direction for components
+      if (isComponentNode && Array.isArray(currentEdges)) {
+        const newEdgeWouldHaveInput = initialDirection.rightDirection || (initialDirection.leftDirection && initialDirection.rightDirection);
         
         if (newEdgeWouldHaveInput) {
-          const existingInputConnections = currentEdges.filter(edge => 
-            edge.targetHandle === params.targetHandle && 
-            (edge.data?.rightDirection === true || // only inputt
-             (edge.data?.leftDirection === true && edge.data?.rightDirection === true)) // bidirectional
-          );
+          const sourceNodeMode = sourceNode?.data?.interactionMode;
+          const existingInputConnections = currentEdges.filter(edge => {
+            if (edge.sourceHandle !== params.sourceHandle) return false;
+            
+            const hasInputFlow = edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
+            if (!hasInputFlow) return false;
+            
+            const edgeSourceNode = currentNodes.find(n => edge.sourceHandle?.startsWith(n.id + '-'));
+            const edgeSourceNodeMode = edgeSourceNode?.data?.interactionMode;
+            
+            return edgeSourceNodeMode === sourceNodeMode;
+          });
           
           if (existingInputConnections.length > 0) {
-            console.log('target already has input connection, blocking new input connection');
+            //console.log('target already has input connection, blocking new input connection');
             return;
           }
         }
@@ -790,9 +811,11 @@
     }
     
     const initialDirection = determineInitialDirection(params.sourceHandle, params.targetHandle);
-    
-    console.log('final initial direction for new edge:', initialDirection);
-    
+    const currentNodes = get(nodes);
+    const sourceNode = currentNodes.find(n => params.sourceHandle?.startsWith(n.id + '-'));
+    const sourceNodeMode = sourceNode?.data?.interactionMode;
+
+    // create new edge + direction markers
     const newEdge = {
       id: `${params.source}-${params.target}`,
       source: params.source,
@@ -810,11 +833,12 @@
         leftDirection: initialDirection.leftDirection,
         rightDirection: initialDirection.rightDirection,
         sourceHandleId: params.sourceHandle,
-        targetHandleId: params.targetHandle
+        targetHandleId: params.targetHandle,
+        sourceMode: sourceNodeMode
       }
     };
     
-    console.log('creating new edge with markers and data:', newEdge);
+    //console.log('creating new edge with markers and data:', newEdge);
     edges.update(all => [...all, newEdge]);
     
     setTimeout(() => {
