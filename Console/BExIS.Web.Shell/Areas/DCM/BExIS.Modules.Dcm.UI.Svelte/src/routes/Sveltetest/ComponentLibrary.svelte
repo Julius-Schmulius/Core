@@ -7,6 +7,7 @@
 
   // get all modes for current interaction mode from manifest
   $: availableModes = getAvailableModes(currentInteractionMode, componentManifest);
+  let selectedModeForAdd: any = null;
 
   function getAvailableModes(interactionMode: string, manifest: any) {
     if (!manifest?.modes) return [];
@@ -21,19 +22,23 @@
     return [];
   }
 
+  function handleModeClick(mode: any) {
+    selectedModeForAdd = mode;
+  }
+
   function handleAddComponent() {
     console.log('adding component from library');
     
-    // get first available mode for current interaction mode
-    const firstMode = availableModes[0];
-    if (!firstMode) {
+    // get selected mode for current interaction mode, default = first
+    const modeToAdd = selectedModeForAdd || availableModes[0];
+    if (!modeToAdd) {
       console.log('no mode available for adding component');
       return;
     }
     
-    // create component object with first mode
+    // create component object with selected mode
     const component = {
-      id: `component-${firstMode.mode_name}-${Date.now()}`,
+      id: `component-${modeToAdd.mode_name}-${Date.now()}`,
       meta: {
         component_name: componentManifest.meta.component_name,
         title: componentManifest.meta.title,
@@ -42,10 +47,11 @@
       globalSettings: {
         interaction_mode: currentInteractionMode
       },
-      mode: firstMode
+      mode: modeToAdd
     };
     
     onAddComponent(component);
+    selectedModeForAdd = null;
   }
 </script>
 
@@ -68,7 +74,14 @@
 
             <div class="modes-list">
               {#each availableModes as mode}
-                <div class="mode-item">
+                <div 
+                  class="mode-item" 
+                  class:selected={selectedModeForAdd?.mode_name === mode.mode_name}
+                  on:click={() => handleModeClick(mode)}
+                  role="button"
+                  tabindex="0"
+                  on:keypress={(e) => e.key === 'Enter' && handleModeClick(mode)}
+                >
                   <div class="mode-main">
                     <span class="mode-name">{mode.mode_name}</span>
                     <div class="mode-description">{mode.description || 'No description available'}</div>
@@ -185,6 +198,19 @@
     padding: 0.5rem;
     border-radius: 4px;
     border: 1px solid #e9ecef;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .mode-item:hover {
+    background: #e9ecef;
+    border-color: #007acc;
+  }
+  
+  .mode-item.selected {
+    background: #d4e9f7;
+    border-color: #007acc;
+    border-width: 2px;
   }
   
   .mode-main {
