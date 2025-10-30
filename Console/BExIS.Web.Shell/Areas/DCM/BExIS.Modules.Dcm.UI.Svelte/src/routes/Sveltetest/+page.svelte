@@ -41,7 +41,7 @@
   // schema nodes from treecomponent
   let schemaNodes: any[] = [];
 
-  // global interaction mode from top-bar controls
+  // initial interaction mode
   let currentInteractionMode = 'edit';
   let selectedMode: any = null;
 
@@ -58,32 +58,21 @@
   // reference to svelte flow component for viewport calculations
   let flowElement: any = null;
 
-  // initial selected mode based on first component in config
+  // set mode 
   onMount(() => {
-    // TODO: set initial interaction mode from config
-    const initialMode = getInteractionModeFromConfig();
-    if (initialMode) {
-      currentInteractionMode = initialMode;
-    }
-    
     const firstComponent = componentConfig?.components?.[0];
     if (firstComponent?.mode?.mode_name) {
-      const manifestModes = componentManifest?.modes?.[currentInteractionMode] || [];
+      const manifestModes = componentManifest?.modes?.edit || [];
       const foundMode = manifestModes.find((mode: any) => mode.mode_name === firstComponent.mode.mode_name);
       if (foundMode) {
         selectedMode = foundMode;
-        console.log('initial selectedmode set from config:', selectedMode);
         forceNodeUpdate();
       }
     }
   });
 
-  function getInteractionModeFromConfig(): string {
-    return componentConfig?.components?.[0]?.globalSettings?.interaction_mode || 'edit';
-  }
-
   function updateInteractionModeInConfig(newMode: string) {
-    console.log('triggering display filter for mode:', newMode);
+    // console.log('triggering display filter for mode:', newMode);
     forceNodeUpdate();
   }
 
@@ -308,7 +297,9 @@
         data: {
           ...node.data,
           edges: $edges || [],
-          version: nodeVersion
+          version: nodeVersion,
+          isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
+          isEditMode: isEditingComponent
         }
       }));
       allNodes.push(...updatedConfigNodes);
@@ -325,7 +316,9 @@
         data: {
           ...node.data,
           edges: $edges || [],
-          version: nodeVersion
+          version: nodeVersion,
+          isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
+          isEditMode: isEditingComponent
         }
       }));
       allNodes.push(...updatedLibraryNodes);
@@ -338,6 +331,32 @@
     nodes.set(allNodes);
   }
 
+  // update edge style based on edit state
+  $: {
+    if (isEditingComponent && $selectedNode) {
+      edges.update(allEdges => allEdges.map(edge => {
+        const isConnectedToSelected = 
+          edge.sourceHandle?.startsWith($selectedNode.id + '-') || 
+          edge.targetHandle?.startsWith($selectedNode.id + '-');
+
+        const edgeStyle = isConnectedToSelected ? 'stroke: #007acc; stroke-width: 2px;' : 'stroke: #cccccc; stroke-width: 2px; opacity: 0.3;';
+        const shouldAnimate = isConnectedToSelected ? edge.animated : false;
+        
+        return {
+          ...edge,
+          style: edgeStyle,
+          animated: shouldAnimate
+        };
+      }));
+    } else {
+      edges.update(allEdges => allEdges.map(edge => ({
+        ...edge,
+        style: 'stroke: #007acc; stroke-width: 2px;',
+        animated: edge.animated
+      })));
+    }
+  }
+
   let nodes: Writable<Node[]> = writable([]);
   let edges: Writable<Edge[]> = writable([]);
 
@@ -346,6 +365,9 @@
 
   let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
   let activeTab = 0;
+
+  // track if user is editing
+  $: isEditingComponent = sidebarMode === 'edit' && $selectedNode !== null;
 
   let validationStatus = writable({
     connected: {
@@ -703,6 +725,18 @@
 
   function handleEdgeClick(event: any) {
     const edge = event.detail.edge;
+    
+    // block click on inactive edge (might not be necessary)
+    if (isEditingComponent && $selectedNode) {
+      const isConnectedToSelected = 
+        edge.sourceHandle?.startsWith($selectedNode.id + '-') || 
+        edge.targetHandle?.startsWith($selectedNode.id + '-');
+      
+      if (!isConnectedToSelected) {
+        return;
+      }
+    }
+    
     console.log('edge clicked:', edge);
     selectedEdge.set(edge);
     selectedNode.set(null);

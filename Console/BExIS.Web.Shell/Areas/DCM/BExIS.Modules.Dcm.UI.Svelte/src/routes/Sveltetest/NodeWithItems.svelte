@@ -27,6 +27,10 @@
   export let xPos: number = 0;
   export let yPos: number = 0;
 
+  // check if component should be disabled
+  $: isGrayedOut = data?.isGrayedOut || false;
+  // $: isEditMode = data?.isEditMode || false;
+
   // gets edges from parent context -> passed via data
   $: edges = data?.edges || [];
 
@@ -132,6 +136,44 @@
     return false;
   }
 
+  // updates incoming connection status for IN/OUT badges
+  function hasInputConnection(itemId: string, variable: any): boolean {
+    if (!edges || edges.length === 0) return false;
+    
+    const handleId = `${id}-${itemId}-handle`;
+    const connectedEdges = edges.filter(edge => {
+      const isSourceMatch = edge.sourceHandle === handleId;
+      const isTargetMatch = edge.targetHandle === handleId;
+      return isSourceMatch || isTargetMatch;
+    });
+    
+    return connectedEdges.some(edge => {
+      const isTargetWithRightArrow = edge.targetHandle === handleId && (edge.source.startsWith('param-') || edge.source.startsWith('schema-')) && edge.data?.rightDirection === true;
+      const isSourceWithRightArrow = edge.sourceHandle === handleId && (edge.target.startsWith('param-') || edge.target.startsWith('schema-')) && edge.data?.rightDirection === true;
+      
+      return isTargetWithRightArrow || isSourceWithRightArrow;
+    });
+  }
+
+  // updates outgoing connection status for IN/OUT badges
+  function hasOutputConnection(itemId: string, variable: any): boolean {
+    if (!edges || edges.length === 0) return false;
+    
+    const handleId = `${id}-${itemId}-handle`;
+    const connectedEdges = edges.filter(edge => {
+      const isSourceMatch = edge.sourceHandle === handleId;
+      const isTargetMatch = edge.targetHandle === handleId;
+      return isSourceMatch || isTargetMatch;
+    });
+    
+    return connectedEdges.some(edge => {
+      const isSourceWithLeftArrow = edge.sourceHandle === handleId && (edge.target.startsWith('param-') || edge.target.startsWith('schema-')) && edge.data?.leftDirection === true;
+      const isTargetWithLeftArrow = edge.targetHandle === handleId && (edge.source.startsWith('param-') || edge.source.startsWith('schema-')) && edge.data?.leftDirection === true;
+      
+      return isSourceWithLeftArrow || isTargetWithLeftArrow;
+    });
+  }
+
   // check if handle can accept new input connections
   function isHandleTargetable(itemId: string, _item: any): boolean {
     const handleId = `${id}-${itemId}-handle`;
@@ -156,7 +198,12 @@
   }
 </script>
 
-<div class="custom-node-content" class:selected>
+<div 
+  class="custom-node-content" 
+  class:selected 
+  class:grayed-out={isGrayedOut}
+  style={isGrayedOut ? 'pointer-events: none;' : ''}
+>
   <div class="node-header">
     <div class="node-title">
       {data?.label ?? 'Unnamed Node'}
@@ -192,15 +239,19 @@
             
             <div class="item-content">
               <!-- only show IN badge if item can be input -->
-              {#if item.isInput}
-                <span class="io in" class:connected={isHandleConnected(item.id, variable || item)}>IN</span>
+              {#if item.isInput && item.isOutput}
+                <span class="io in" class:connected={hasInputConnection(item.id, variable || item)}>IN</span>
+              {:else if item.isInput}
+                <span class="io in" class:connected={hasInputConnection(item.id, variable || item)}>IN</span>
               {/if}
               
               <span class="item-label">{item.label}</span>
               
               <!-- only show OUT badge if item can be output -->
-              {#if item.isOutput}
-                <span class="io out" class:connected={isHandleConnected(item.id, variable || item)}>OUT</span>
+              {#if item.isInput && item.isOutput}
+                <span class="io out" class:connected={hasOutputConnection(item.id, variable || item)}>OUT</span>
+              {:else if item.isOutput}
+                <span class="io out" class:connected={hasOutputConnection(item.id, variable || item)}>OUT</span>
               {/if}
             </div>
             <!-- un/comment to toggle type hiding in childnodes -->
@@ -237,6 +288,11 @@
   .custom-node-content.selected {
     border-color: #ff6b35;
     box-shadow: 0 0 12px rgba(255, 107, 53, 0.4);
+  }
+    .custom-node-content.grayed-out {
+    opacity: 0.4;
+    filter: grayscale(0.8);
+    cursor: not-allowed;
   }
   .node-header {
     text-align: center;
@@ -315,14 +371,14 @@
   }
   /* highlight when properly connected to external parameters */
   .io.in.connected {
-    background: #4caf50;
+    background: #1976d2;
     color: white;
-    box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+    opacity: 1;
   }
   .io.out.connected {
-    background: #4caf50;
+    background: #7b1fa2;
     color: white;
-    box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+    opacity: 1;
   }
   .item-label {
     font-weight: bold;
