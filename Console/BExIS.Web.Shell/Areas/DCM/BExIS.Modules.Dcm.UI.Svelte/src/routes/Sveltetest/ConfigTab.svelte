@@ -8,6 +8,8 @@
   export let componentManifest: any;
   export let selectedNode: any;
 
+  let hasLoop = false;
+  let loopDetails: Array<{path: string[]}> = [];
   let selectedParameter = '';
   let regexInput = '';
   let showResetConfirm = false;
@@ -158,6 +160,198 @@
       items: nodeItems
     };
   }
+  // check edges for loops and dependencies
+  function checkForLoops() {
+    if (!selectedNode || !$edges) {
+      hasLoop = false;
+      loopDetails = [];
+      return;
+    }
+    const nodeId = selectedNode.id;
+    const detectedLoops: Array<{path: string[]}> = [];
+    const seenLoops = new Set<string>();
+
+    const componentEdges = $edges.filter(edge => 
+      edge.sourceHandle?.startsWith(nodeId + '-') || 
+      edge.targetHandle?.startsWith(nodeId + '-')
+    );
+
+    if (componentEdges.length === 0) {
+      hasLoop = false;
+      loopDetails = [];
+      return;
+    }
+
+    // recursive function to find all paths from a starting edge
+    function findAllPaths(startEdge: any, currentPath: string[], visited: Set<string>): string[][] {
+      const paths: string[][] = [];
+      
+      // get current edge end point
+      let currentNode: string;
+      let currentHandle: string;
+      
+      if (startEdge.target?.startsWith('schema-') || startEdge.target?.startsWith('param-')) {
+        currentNode = startEdge.target;
+        currentHandle = startEdge.targetHandle || '';
+      } else {
+        currentNode = startEdge.source;
+        currentHandle = startEdge.sourceHandle || '';
+      }
+      
+      // find all edges continuing from this node
+      const continuingEdges = $edges.filter(edge => {
+        if (visited.has(edge.id)) return false;
+        
+        const isFromSchema = (edge.source === currentNode || edge.sourceHandle === currentHandle);
+        const isToSchema = (edge.target === currentNode || edge.targetHandle === currentHandle);
+        
+        return (isFromSchema || isToSchema) && edge.id !== startEdge.id;
+      });
+      
+      // if no continuing edges check for loop
+      if (continuingEdges.length === 0) {
+        if (currentHandle?.startsWith(nodeId + '-')) {
+          const finalHandle = currentHandle.replace(nodeId + '-', '').replace('-handle', '');
+          paths.push([...currentPath, finalHandle]);
+        }
+        return paths;
+      }
+      
+      // follow each continuing edge
+      continuingEdges.forEach(edge => {
+        const newVisited = new Set(visited);
+        newVisited.add(edge.id);
+        
+        let nextPath = [...currentPath];
+        
+        // add intermediate node to path
+        if (edge.target?.startsWith('schema-') || edge.target?.startsWith('param-')) {
+          const schemaName = edge.target.replace('schema-leaf-', '').replace('schema-', '').replace('param-', '');
+          nextPath.push(schemaName);
+        } else if (edge.source?.startsWith('schema-') || edge.source?.startsWith('param-')) {
+          const schemaName = edge.source.replace('schema-leaf-', '').replace('schema-', '').replace('param-', '');
+          nextPath.push(schemaName);
+        }
+        
+        // check if return to component
+        if (edge.sourceHandle?.startsWith(nodeId + '-') || edge.targetHandle?.startsWith(nodeId + '-')) {
+          const returnHandle = (edge.sourceHandle?.startsWith(nodeId + '-') ? edge.sourceHandle : edge.targetHandle)
+            .replace(nodeId + '-', '').replace('-handle', '');
+          nextPath.push(returnHandle);
+          paths.push(nextPath);
+        } else {
+          // continue recursively
+          const subPaths = findAllPaths(edge, nextPath, newVisited);
+          paths.push(...subPaths);
+        }
+      });
+      
+      return paths;
+    }
+
+    // check output edges for feedback loops
+    componentEdges.forEach(outEdge => {
+      let componentHandle: string | null = null;
+      let schemaNode: string | null = null;
+
+      if (outEdge.sourceHandle?.startsWith(nodeId + '-')) {
+        componentHandle = outEdge.sourceHandle;
+        schemaNode = outEdge.target;
+      } else if (outEdge.targetHandle?.startsWith(nodeId + '-')) {
+        componentHandle = outEdge.targetHandle;
+        schemaNode = outEdge.source;
+      }
+
+      if (!componentHandle || !schemaNode) return;
+
+      const handle = componentHandle.replace(nodeId + '-', '').replace('-handle', '');
+      const schema = schemaNode.replace('schema-leaf-', '').replace('schema-', '').replace('param-', '');
+      
+      const startPath = [handle, schema];
+      const visited = new Set([outEdge.id]);
+      
+      const allPaths = findAllPaths(outEdge, startPath, visited);
+      
+      allPaths.forEach(path => {
+        if (path.length >= 3) {
+          const sortedPath = [...path].sort();
+          const loopKey = sortedPath.join('-');
+          
+          if (!seenLoops.has(loopKey)) {
+            seenLoops.add(loopKey);
+            detectedLoops.push({ path });
+          }
+        }
+      });
+    });
+
+    // map containing counts of outputs
+    const schemaOutputCounts = new Map<string, string[]>();
+    
+    $edges.forEach(edge => {
+      const targetIsSchema = edge.target?.startsWith('schema-') || edge.target?.startsWith('param-');
+      const sourceIsSchema = edge.source?.startsWith('schema-') || edge.source?.startsWith('param-');
+      
+      if (edge.data?.leftDirection) {
+        if (targetIsSchema) {
+          const schemaNode = edge.target;
+          let sourceHandle = '';
+          
+          if (edge.sourceHandle?.startsWith(nodeId + '-')) {
+            sourceHandle = edge.sourceHandle.replace(nodeId + '-', '').replace('-handle', '');
+          } else {
+            const sourceNode = edge.source;
+            sourceHandle = sourceNode.replace('config-component-', 'Comp').replace('library-component-', 'Comp');
+          }
+          
+          if (!schemaOutputCounts.has(schemaNode)) {
+            schemaOutputCounts.set(schemaNode, []);
+          }
+          schemaOutputCounts.get(schemaNode)!.push(sourceHandle);
+        } else if (sourceIsSchema) {
+          const schemaNode = edge.source;
+          let targetHandle = '';
+          
+          if (edge.targetHandle?.startsWith(nodeId + '-')) {
+            targetHandle = edge.targetHandle.replace(nodeId + '-', '').replace('-handle', '');
+          } else {
+            const targetNode = edge.target;
+            targetHandle = targetNode.replace('config-component-', 'Comp').replace('library-component-', 'Comp');
+          }
+          
+          if (!schemaOutputCounts.has(schemaNode)) {
+            schemaOutputCounts.set(schemaNode, []);
+          }
+          schemaOutputCounts.get(schemaNode)!.push(targetHandle);
+        }
+      }
+    });
+
+    // check for multiple outputs to one Leaf Node
+    schemaOutputCounts.forEach((handles, schemaNode) => {
+      if (handles.length > 1) {
+        const schemaName = schemaNode.replace('schema-leaf-', '').replace('schema-', '').replace('param-', '');
+        
+        handles.forEach(handle => {
+          const warningKey = `multiple-output-${schemaNode}-${handle}`;
+          
+          if (!seenLoops.has(warningKey)) {
+            seenLoops.add(warningKey);
+            detectedLoops.push({
+              path: [handle, schemaName, `Write Dependency`]
+            });
+          }
+        });
+      }
+    });
+
+    hasLoop = detectedLoops.length > 0;
+    loopDetails = detectedLoops;
+  }
+
+  $: if ($edges || selectedNode) {
+    checkForLoops();
+  }
 </script>
 
 <div class="config-tab">
@@ -260,6 +454,41 @@
         </div>
       {/if}
     </div>
+  </div>
+  
+  <!-- loop detection -->
+  <div class="bg-transparent border border-border rounded-md p-4">
+    <div class="flex items-center gap-3">
+      {#if hasLoop}
+        <span class="text-xl font-bold text-danger">⚠</span>
+        <span class="text-sm font-bold text-danger-dark">Dependencies detected</span>
+      {:else}
+        <span class="text-xl font-bold text-success">✓</span>
+        <span class="text-sm font-bold text-muted">No dependencies detected</span>
+      {/if}
+    </div>
+    
+    {#if hasLoop && loopDetails.length > 0}
+      <div class="mt-4 pt-4 border-t border-danger-light">
+        <div class="mb-2 text-xs text-danger-dark uppercase tracking-wider">
+          Detected Dependencies:
+        </div>
+        <div class="flex flex-col gap-2">
+          {#each loopDetails as loop}
+            <div class="flex items-center gap-2 text-xs text-danger-dark">
+              {#each loop.path as node, i}
+                <span class="bg-white border border-danger-light px-1.5 py-0.5 rounded font-mono text-xs">
+                  {node}
+                </span>
+                {#if i < loop.path.length - 1}
+                  <span class="text-danger font-bold">→</span>
+                {/if}
+              {/each}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- regex -->
