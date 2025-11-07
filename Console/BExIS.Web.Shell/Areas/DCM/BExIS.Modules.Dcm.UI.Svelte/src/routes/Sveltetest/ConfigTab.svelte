@@ -338,7 +338,7 @@
           if (!seenLoops.has(warningKey)) {
             seenLoops.add(warningKey);
             detectedLoops.push({
-              path: [handle, schemaName, `Write Dependency`]
+              path: [handle, schemaName, `Connection Error`]
             });
           }
         });
@@ -455,23 +455,23 @@
       {/if}
     </div>
   </div>
-  
+
   <!-- loop detection -->
   <div class="bg-transparent border border-border rounded-md p-4">
     <div class="flex items-center gap-3">
       {#if hasLoop}
         <span class="text-xl font-bold text-danger">⚠</span>
-        <span class="text-sm font-bold text-danger-dark">Dependencies detected</span>
+        <span class="text-sm font-bold text-danger-dark">Error detected</span>
       {:else}
         <span class="text-xl font-bold text-success">✓</span>
-        <span class="text-sm font-bold text-muted">No dependencies detected</span>
+        <span class="text-sm font-bold text-muted">No Error detected</span>
       {/if}
     </div>
     
     {#if hasLoop && loopDetails.length > 0}
       <div class="mt-4 pt-4 border-t border-danger-light">
         <div class="mb-2 text-xs text-danger-dark uppercase tracking-wider">
-          Detected Dependencies:
+          Detected Errors:
         </div>
         <div class="flex flex-col gap-2">
           {#each loopDetails as loop}
