@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     SvelteFlow,
+    SvelteFlowProvider,
     Background,
     Controls,
     Position,
@@ -30,6 +31,7 @@
   import ComponentLibrary from './ComponentLibrary.svelte';
   import SectionNode from './SectionNode.svelte';
   import LeafNode from './LeafNode.svelte';
+  import ResetViewButton from './ResetViewButton.svelte';
 
   import componentConfigJson from './componentConfig.json';
   import componentManifestJson from './componentManifest.json';
@@ -55,8 +57,8 @@
   // init counter for forcing node updates
   let nodeVersion = 0;
 
-  // reference to svelte flow component for viewport calculations
-  let flowElement: any = null;
+  // track last node state
+  let lastNodesSnapshot = '';
 
   // set mode 
   onMount(() => {
@@ -169,6 +171,13 @@
     console.log('force node update, version:', nodeVersion);
   }
 
+  let nodes: Writable<Node[]> = writable([]);
+  let edges: Writable<Edge[]> = writable([]);
+  let selectedNode: Writable<Node | null> = writable(null);
+  let selectedEdge: Writable<Edge | null> = writable(null);
+  let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
+  let activeTab = 0;
+
   // handle schema nodes generation from treecomponent
   function handleSchemaNodesGenerated(event: any) {
     const generatedNodes = event.detail.nodes || [];
@@ -185,8 +194,8 @@
     
     const currentMode = interactionMode || currentInteractionMode;
     const currentManifest = manifest || componentManifest;
-    
-    const nodes: Node[] = [];
+    const configNodesArray: Node[] = [];
+    //const existingNodes = get(nodes);
     
     components.forEach((component: any, index: number) => {
       console.log('checking component with interaction_mode:', component.globalSettings?.interaction_mode, 'current mode:', currentMode);
@@ -209,6 +218,9 @@
           const nodeWidth = Math.max(320, childWidth + 80);
           const nodeHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
 
+          const nodeId = `config-component-${index}`;
+          const position = { x: 400 + (index * 200), y: 100 };
+          
           const node = {
             id: `config-component-${index}`,
             type: 'nodeWithItems',
@@ -223,7 +235,7 @@
               edges: [],
               version: version || nodeVersion
             },
-            position: { x: 400 + (index * 200), y: 100 },
+            position: position,
             style: `width: ${nodeWidth}px; height: ${nodeHeight}px;`,
             selectable: true,
             deletable: false,
@@ -233,16 +245,14 @@
             draggable: true
           };
           
-          nodes.push(node);
+          configNodesArray.push(node);
           console.log('added config node:', node.id, 'for mode:', currentMode);
         }
-      } else {
-        console.log('skipping component - mode mismatch:', component.globalSettings?.interaction_mode, '!==', currentMode);
       }
     });
-    
-    console.log('created', nodes.length, 'config nodes for mode:', currentMode);
-    return nodes;
+
+    // console.log('created', configNodesArray.length, 'nodes for mode:', currentMode);
+    return configNodesArray;
   }
 
   function filterEdgesForInteractionMode() {
@@ -287,21 +297,27 @@
     return node.data?.interactionMode === currentInteractionMode;
   });
 
-  // merge all nodes & replace parameter nodes with schema nodes
+  // merge all nodes & replace parameter nodes with schema nodes reactively
   $: {
     const allNodes: Node[] = [];
+    const currentNodes = $nodes;
     
     if (configNodes && Array.isArray(configNodes) && configNodes.length > 0) {
-      const updatedConfigNodes = configNodes.map(node => ({
-        ...node,
-        data: {
-          ...node.data,
-          edges: $edges || [],
-          version: nodeVersion,
-          isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
-          isEditMode: isEditingComponent
-        }
-      }));
+      const updatedConfigNodes = configNodes.map(node => {
+        const existingNode = currentNodes.find(n => n.id === node.id);
+        
+        return {
+          ...node,
+          position: existingNode?.position || node.position,
+          data: {
+            ...node.data,
+            edges: $edges || [],
+            version: nodeVersion,
+            isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
+            isEditMode: isEditingComponent
+          }
+        };
+      });
       allNodes.push(...updatedConfigNodes);
     }
     
@@ -311,24 +327,55 @@
     }
     
     if (filteredLibraryNodes && Array.isArray(filteredLibraryNodes)) {
-      const updatedLibraryNodes = filteredLibraryNodes.map(node => ({
-        ...node,
-        data: {
-          ...node.data,
-          edges: $edges || [],
-          version: nodeVersion,
-          isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
-          isEditMode: isEditingComponent
-        }
-      }));
+      const updatedLibraryNodes = filteredLibraryNodes.map(node => {
+        const existingNode = currentNodes.find(n => n.id === node.id);
+        
+        return {
+          ...node,
+          position: existingNode?.position || node.position,
+          data: {
+            ...node.data,
+            edges: $edges || [],
+            version: nodeVersion,
+            isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
+            isEditMode: isEditingComponent
+          }
+        };
+      });
       allNodes.push(...updatedLibraryNodes);
     }
     
-    console.log('setting nodes. config nodes count:', configNodes.length);
-    console.log('schema nodes count:', schemaNodes.length);
-    console.log('filtered library nodes count:', filteredLibraryNodes.length);
+    // create snapshot for change detection
+    const newSnapshot = JSON.stringify(
+      allNodes.map(n => ({
+        id: n.id,
+        x: Math.round(n.position.x),
+        y: Math.round(n.position.y),
+        version: n.data?.version,
+        childItemsCount: Array.isArray(n.data?.childItems) ? n.data.childItems.length : 0,
+        isGrayedOut: n.data?.isGrayedOut,
+        isEditMode: n.data?.isEditMode,
+        selectedNodeId: $selectedNode?.id,
+
+        edgesHash: JSON.stringify($edges.map(e => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle,
+          targetHandle: e.targetHandle,
+          leftDir: e.data?.leftDirection,
+          rightDir: e.data?.rightDirection
+        })))
+      }))
+    );
     
-    nodes.set(allNodes);
+    if (newSnapshot !== lastNodesSnapshot) {
+      lastNodesSnapshot = newSnapshot;
+      console.log('setting nodes. config nodes count:', configNodes.length);
+      console.log('schema nodes count:', schemaNodes.length);
+      console.log('filtered library nodes count:', filteredLibraryNodes.length);
+      nodes.set(allNodes);
+    }
   }
 
   // update edge style based on edit state
@@ -357,14 +404,14 @@
     }
   }
 
-  let nodes: Writable<Node[]> = writable([]);
-  let edges: Writable<Edge[]> = writable([]);
+  // let nodes: Writable<Node[]> = writable([]);
+  // let edges: Writable<Edge[]> = writable([]);
 
-  let selectedNode: Writable<Node | null> = writable(null);
-  let selectedEdge: Writable<Edge | null> = writable(null);
+  // let selectedNode: Writable<Node | null> = writable(null);
+  // let selectedEdge: Writable<Edge | null> = writable(null);
 
-  let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
-  let activeTab = 0;
+  // let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
+  // let activeTab = 0;
 
   // track if user is editing
   $: isEditingComponent = sidebarMode === 'edit' && $selectedNode !== null;
@@ -504,33 +551,55 @@
     // forceNodeUpdate();
   }
 
+  // calc viewport center for node placement
   function getViewportCenter(): {x: number, y: number} {
-    if (flowElement && flowElement.getViewport) {
-      const viewport = flowElement.getViewport();
-      const flowContainer = flowElement.domNode || flowElement;
-      const flowRect = flowContainer.getBoundingClientRect?.() || { width: 800, height: 600 };
-      
-      console.log('viewport info:', viewport);
-      console.log('flow rect:', flowRect);
-      
-      const centerX = (-viewport.x + flowRect.width / 2) / viewport.zoom;
-      const centerY = (-viewport.y + flowRect.height / 2) / viewport.zoom;
-      
-      console.log('calculated center:', { x: centerX, y: centerY });
-      
-      return { x: centerX - 160, y: centerY - 100 };
-    }
+    const flowContainer = document.querySelector('.svelte-flow');
+    const flowRect = flowContainer?.getBoundingClientRect();
     
-    console.log('using fallback center position');
-    return { x: 400, y: 300 };
+    if (!flowRect || !flowContainer) {
+      // console.log('no flow container > fallback');
+      return { x: 400, y: 300 };
+    }
+
+    // get viewport from DOM
+    const viewportElement = flowContainer.querySelector('.svelte-flow__viewport');
+    if (!viewportElement) {
+      // console.log('no viewport found > fallback');
+      return { x: 400, y: 300 };
+    }
+
+    // parse transform matrix to get current pan/zoom
+    const transform = window.getComputedStyle(viewportElement).transform; // get transform string matrix from DOM
+    // EXAMPLE: Zoom 150%, displaced by 200px right & 100px down -> transform: matrix(1.5, 0, 0, 1.5, 200, 100);
+    
+    let x = 0, y = 0, zoom = 1;
+    
+    if (transform && transform !== 'none') {
+      const matrix = transform.match(/matrix\(([^)]+)\)/);
+      // extract matrix values from CSS transform string,  EXAMPLE: "matrix(1.5, 0, 0, 1.5, 200, 100)" >> ["1.5", "0", "0", "1.5", "200", "100"]
+      
+      if (matrix) {
+        const values = matrix[1].split(',').map(v => parseFloat(v.trim())); // csv to float array
+        zoom = values[0]; // zoom level
+        x = values[4];    // horizontal
+        y = values[5];    // vertical
+      }
+    }
+
+    // calculate center pos in flow coordinates
+    const centerX = (-x + flowRect.width / 2) / zoom;
+    const centerY = (-y + flowRect.height / 2) / zoom;
+    
+    console.log('calculated center:', { x, y, zoom, centerX, centerY });
+    
+    return { x: centerX - 160, y: centerY - 100 };
   }
 
   function handleAddComponent(component: any) {
-    console.log('adding component to flow:', component);
-    
+    // console.log('adding component to flow:', component);
     const centerPos = getViewportCenter();
-    console.log('center position for new component:', centerPos);
-    
+    // console.log('center position for new component:', centerPos);
+
     const modeVariables = component.mode?.variables?.variable || [];
     
     // create dynamic child items for new componentg
@@ -1359,7 +1428,7 @@
   .cancel-button:hover {
     background: #5a6268;
   }
-  
+
   .confirm-button {
     padding: 0.75rem 1.5rem;
     background: #dc3545;
@@ -1401,25 +1470,27 @@
 
   <div class="layout">
     <div class="flow-wrapper">
-      <SvelteFlow
-        {nodes}
-        {edges}
-        {nodeTypes}
-        {edgeTypes}
-        bind:this={flowElement}
-        on:nodeclick={handleNodeClick}
-        on:edgeclick={handleEdgeClick}
-        on:paneclick={handlePaneClick}
-        on:connect={onConnect}
-        {isValidConnection}
-        defaultEdgeOptions={{type: 'button'}}
-        fitView
-        selectionMode={SelectionMode.Partial}
-        connectionLineType={ConnectionLineType.SmoothStep}
-      >
-        <Background />
-        <Controls />
-      </SvelteFlow>
+      <SvelteFlowProvider>
+        <SvelteFlow
+          {nodes}
+          {edges}
+          {nodeTypes}
+          {edgeTypes}
+          on:nodeclick={handleNodeClick}
+          on:edgeclick={handleEdgeClick}
+          on:paneclick={handlePaneClick}
+          on:connect={onConnect}
+          {isValidConnection}
+          defaultEdgeOptions={{type: 'button'}}
+          fitView
+          selectionMode={SelectionMode.Partial}
+          connectionLineType={ConnectionLineType.SmoothStep}
+        >
+          <Background />
+          <Controls />
+        </SvelteFlow>
+        <ResetViewButton />
+      </SvelteFlowProvider>
     </div>
 
     <div class="sidebar" class:empty={sidebarMode === 'empty'}>

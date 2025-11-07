@@ -184,8 +184,7 @@
         forceLeftActive: true
       };
     }
-
-    // TODO FIX: input & output: check for other input edges to same handle 
+ 
     if (variable.is_input && variable.is_output) {
       const currentEdges = $edges || [];
       const otherInputEdges = currentEdges.filter(edge => 
@@ -292,7 +291,7 @@
   path={edgePath}
   {markerEnd}
   {markerStart}
-  style="stroke: #007acc; stroke-width: 2px;"
+  {style}
 />
 
 {#if selected}
