@@ -14,7 +14,7 @@
 </script>
 
 <div class="preview-tab">
-  <h4>Default Values (mode: {selectedMode.mode_name})</h4>
+  <h4>Default Values {selectedMode ? `(mode: ${selectedMode.mode_name})` : ''}</h4>
   
   {#if selectedMode && modeVariables.length > 0}
     <div class="section">
@@ -45,6 +45,12 @@
       <h5>Variables</h5>
       <div class="no-variables">
         No variables defined for mode "{selectedMode.mode_name}".
+      </div>
+    </div>
+  {:else}
+    <div class="section">
+      <div class="no-variables">
+        Error. No submode detected.
       </div>
     </div>
   {/if}
