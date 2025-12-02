@@ -55,6 +55,7 @@
   $: sourceHandleFromData = data?.sourceHandleId || sourceHandleId;
   $: targetHandleFromData = data?.targetHandleId || targetHandleId;
 
+  // calculate edge path
   $: [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -64,7 +65,7 @@
     targetPosition,
   });
 
-  // helper function to determine variable for edge handle
+  // helper function to determine component node and variable for this edge
   function findComponentNodeAndVariable() {
     let componentNode: any = null;
     let handleId = '';
@@ -98,6 +99,7 @@
     let initLeft = false;
     let initRight = true;
 
+    // determine initial directions based on variable properties
     if (variable.is_input && variable.is_output) {
       initLeft = true;
       initRight = true;
@@ -109,7 +111,7 @@
       initRight = false;
     }
 
-    // arrow persistence in edge store (also including markers)
+    // update arrow directions in edges store & lock unidirectional arrow-menu buttons
     if (edges) {
       edges.update(eds => eds.map(e => { // update edge directions
         if (e.id !== id) return e;
@@ -122,13 +124,13 @@
             sourceHandleId: sourceHandleFromData,
             targetHandleId: targetHandleFromData
           },
+          // block arrows if only one direction possible
           markerEnd: initLeft ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
           markerStart: initRight ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined
         };
       }));
     }
 
-    // local states update
     leftDirection = initLeft;
     rightDirection = initRight;
   }
@@ -138,10 +140,9 @@
   });
 
   $: if ($nodes) {
-    ensureInitialDirections(); // for node/variable availability
+    ensureInitialDirections();
   }
 
-  // reactivity for edge changes
   $: if ($edges) {
     isDirectionChangeable = checkDirectionChangeable();
   }
@@ -150,18 +151,11 @@
   $: isDirectionChangeable = checkDirectionChangeable();
 
   function checkDirectionChangeable() {
-    console.log('=== checkDirectionChangeable ===');
-    console.log('Edge ID:', id);
-    console.log('sourceHandleFromData:', sourceHandleFromData);
-    console.log('targetHandleFromData:', targetHandleFromData);
-    
     const { componentNode, variable, handleId } = findComponentNodeAndVariable();
     if (!componentNode || !handleId) {
-      console.log('No component node found');
       return { canChange: true, leftDisabled: false, rightDisabled: false };
     }
     if (!variable) {
-      console.log('Variable not found for handle:', handleId);
       return { canChange: true, leftDisabled: false, rightDisabled: false };
     }
 
@@ -185,6 +179,7 @@
       };
     }
  
+    // both input & output = both buttons enabled, but check for existing bidirectional connections
     if (variable.is_input && variable.is_output) {
       const currentEdges = $edges || [];
       const otherInputEdges = currentEdges.filter(edge => 
@@ -207,7 +202,7 @@
     return { canChange: true, leftDisabled: false, rightDisabled: false };
   }
 
-  // use disabled/forced states
+  // reactive update arrow directions based on data changes
   $: {
     if (isDirectionChangeable?.forceLeftActive) {
       leftDirection = true;
@@ -305,11 +300,7 @@
         <div class="edge-popup" on:click={handlePopupClick}>
           <div class="popup-row">
             <button class="delete-button" on:click={deleteEdge} title="delete edge">
-              {#if imageLoaded}
-                <img src="/muelleimer.png" alt="delete" class="trash-icon" on:error={handleImageError} />
-              {:else}
                 <span class="trash-fallback">🗑️</span>
-              {/if}
             </button>
             
             <div class="direction-controls">

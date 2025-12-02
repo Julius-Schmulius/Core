@@ -46,8 +46,7 @@
         let currentPosition = { ...nodePosition };
 
         // determine choice type
-        const choiceType = choiceComponent.oneOf ? 'OneOf' : 
-                          choiceComponent.anyOf ? 'AnyOf' : 'AllOf';
+        const choiceType = choiceComponent.oneOf ? 'OneOf' : choiceComponent.anyOf ? 'AnyOf' : 'AllOf';
 
         // choice header node
         const headerNode = {

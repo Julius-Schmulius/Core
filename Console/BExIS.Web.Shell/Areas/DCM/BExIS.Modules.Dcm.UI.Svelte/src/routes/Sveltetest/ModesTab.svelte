@@ -46,7 +46,6 @@
 
   function applyChanges() {
     if (tempSelectedMode) {
-      console.log('applying mode change:', tempSelectedMode.mode_name);
       onModeChange(tempSelectedMode);
     }
   }

@@ -110,16 +110,16 @@
                         required: false, // toggle to render required leaf nodes red
                         path: currentPath,
                         isLeaf: true,
-                        // TODO FIX: for validation all metadata fields are outputs
                         is_input: false,
                         is_output: true,
-                        target_variable: key
+                        target_variable: key,
+                        is_visible: true
                     },
                     position: { x: position.x + 30, y: position.y }, // indentation
                     draggable: true,
                     selectable: true,
                     deletable: false,
-                    style: 'width: 180px; height: 60px;'
+                    style: 'width: 220px; height: 60px;' //previously = 180
                 };
                 nodes.push(leafNode);
                 position.y += spacing;
@@ -156,5 +156,5 @@
 
     loader(currentSchema);
 
-    console.log('treecomponent: schema loaded, nodes generated');
+    // console.log('treecomponent: schema loaded, nodes generated');
 </script>

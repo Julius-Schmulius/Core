@@ -4,15 +4,17 @@
   export let componentConfig: any;
   export let componentManifest: any;
   export let onAddComponent: (component: any) => void;
+  export let onSaveMappings: () => void;
+  export let onSave: () => void;
 
-  // get all modes for current interaction mode from manifest
+  // get all submodes for current interaction mode from manifest
   $: availableModes = getAvailableModes(currentInteractionMode, componentManifest);
   let selectedModeForAdd: any = null;
 
   function getAvailableModes(interactionMode: string, manifest: any) {
     if (!manifest?.modes) return [];
     
-    // return all modes based on current interaction mode from manifest
+    // return all submodes based on current interaction mode from manifest
     if (interactionMode === 'edit' && manifest.modes.edit) {
       return manifest.modes.edit;
     } else if (interactionMode === 'view' && manifest.modes.view) {
@@ -27,12 +29,10 @@
   }
 
   function handleAddComponent() {
-    console.log('adding component from library');
     
     // get selected mode for current interaction mode, default = first
     const modeToAdd = selectedModeForAdd || availableModes[0];
     if (!modeToAdd) {
-      console.log('no mode available for adding component');
       return;
     }
     
@@ -123,6 +123,12 @@
         </div>
       </div>
     {/if}
+  </div>
+  
+  <div class="save-mappings-section">
+    <button class="save-mappings-button" on:click={onSave}>
+      Save
+    </button>
   </div>
 </div>
 
@@ -281,5 +287,30 @@
     font-size: 0.85rem;
     color: #999;
     font-style: italic;
+  }
+
+  .save-mappings-section {
+    padding: 1rem 0 0 0;
+    border-top: 1px solid #ddd;
+    margin-top: auto;
+  }
+  
+  .save-mappings-button {
+    width: 100%;
+    padding: 0.75rem;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s;
+    font-size: 0.9rem;
+  }
+  
+  .save-mappings-button:hover {
+    background: #218838;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3);
   }
 </style>

@@ -33,46 +33,25 @@
 
   // gets edges from parent context -> passed via data
   $: edges = data?.edges || [];
+  
+  // convert edges store to array if needed
+  $: edgesArray = edges && typeof edges.subscribe === 'function' ? get(edges) : (Array.isArray(edges) ? edges : []);
 
   // update childItems on data changes
   $: childItems = data?.childItems || [];
 
-  // debug logging
-  $: {
-    console.log('=== NodeWithItems DATA CHANGE ===');
-    console.log('Node ID:', id);
-    console.log('Full data object:', data);
-    console.log('data.childItems:', data?.childItems);
-    console.log('Extracted childItems:', childItems);
-    console.log('childItems length:', childItems.length);
-    console.log('Data version:', data?.version);
-    console.log('Edges for connection check:', edges);
-  }
-
-  onMount(() => {
-    console.log('=== NodeWithItems MOUNTED ===');
-    console.log('Node ID:', id);
-    console.log('Initial data:', data);
-    console.log('Initial childItems:', childItems);
-    console.log('Initial childItems length:', childItems.length);
-  });
-
-  // helper function checks if component child item handle is properly connected based on arrow directions
+  // helper function checks if component child item handle is properly connected based on arrow directions (NOT USED)
   function isHandleConnected(itemId: string, variable: any): boolean {
-    if (!edges || edges.length === 0) return false;
+    if (!edgesArray || !Array.isArray(edgesArray) || edgesArray.length === 0) return false;
     
     const handleId = `${id}-${itemId}-handle`;
     
-    console.log(`checking connection for component handle ${handleId}:`);
-    
     // find all edges connected to handles
-    const connectedEdges = edges.filter(edge => {
+    const connectedEdges = edgesArray.filter(edge => {
       const isSourceMatch = edge.sourceHandle === handleId || edge.source === handleId;
       const isTargetMatch = edge.targetHandle === handleId || edge.target === handleId;
       return isSourceMatch || isTargetMatch;
     });
-    
-    console.log(`- found ${connectedEdges.length} connected edges`);
     
     // check connection requirements based on variable type
     if (variable.is_input && variable.is_output) {
@@ -86,7 +65,6 @@
       
       if (bidirectionalEdges.length > 0) {
         hasValidConnection = true;
-        console.log(`- ✓ has bidirectional connection`);
       } else {
         // check for separate input and output connections
         const inputEdges = connectedEdges.filter(edge => {
@@ -103,11 +81,9 @@
         
         if (inputEdges.length > 0 && outputEdges.length > 0) {
           hasValidConnection = true;
-          console.log(`- ✓ has separate input and output connections`);
         }
       }
-      
-      console.log(`- input/output result: ${hasValidConnection}`);
+
       return hasValidConnection;
       
     } else if (variable.is_input) {
@@ -117,8 +93,6 @@
         const hasRightArrow = edge.data?.rightDirection;
         return isIncoming && hasRightArrow;
       });
-      
-      console.log(`- input only result: ${hasInputConnection}`);
       return hasInputConnection;
       
     } else if (variable.is_output) {
@@ -128,8 +102,6 @@
         const hasLeftArrow = edge.data?.leftDirection;
         return isOutgoing && hasLeftArrow;
       });
-      
-      console.log(`- output only result: ${hasOutputConnection}`);
       return hasOutputConnection;
     }
     
@@ -138,10 +110,10 @@
 
   // updates incoming connection status for IN/OUT badges
   function hasInputConnection(itemId: string, variable: any): boolean {
-    if (!edges || edges.length === 0) return false;
+    if (!edgesArray || !Array.isArray(edgesArray) || edgesArray.length === 0) return false;
     
     const handleId = `${id}-${itemId}-handle`;
-    const connectedEdges = edges.filter(edge => {
+    const connectedEdges = edgesArray.filter(edge => {
       const isSourceMatch = edge.sourceHandle === handleId;
       const isTargetMatch = edge.targetHandle === handleId;
       return isSourceMatch || isTargetMatch;
@@ -157,10 +129,10 @@
 
   // updates outgoing connection status for IN/OUT badges
   function hasOutputConnection(itemId: string, variable: any): boolean {
-    if (!edges || edges.length === 0) return false;
+    if (!edgesArray || !Array.isArray(edgesArray) || edgesArray.length === 0) return false;
     
     const handleId = `${id}-${itemId}-handle`;
-    const connectedEdges = edges.filter(edge => {
+    const connectedEdges = edgesArray.filter(edge => {
       const isSourceMatch = edge.sourceHandle === handleId;
       const isTargetMatch = edge.targetHandle === handleId;
       return isSourceMatch || isTargetMatch;
@@ -179,12 +151,13 @@
     const handleId = `${id}-${itemId}-handle`;
     const variable = (data?.componentVariables || []).find((v: any) => `${id}-${v.target_variable}-handle` === handleId) || _item;
     
-    if (!variable?.is_input) return true; // not input > can connect
-    if (!edges || edges.length === 0) return true; // no edges > can connect
+    if (!variable?.is_input) return true;
+    if (!edgesArray || !Array.isArray(edgesArray) || edgesArray.length === 0) return true;
 
     const currentInteractionMode = data?.interactionMode;
 
-    const hasInputAlready = edges.some((edge: any) => {
+    // check if if input connection already exists in current interaction mode for this handle
+    const hasInputAlready = edgesArray.some((edge: any) => {
       const isOutgoingFromThisHandle = edge.sourceHandle === handleId;
       const isToSchema = edge.target?.startsWith('schema-') || edge.target?.startsWith('param-');
       const hasInputFlow = edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
@@ -208,12 +181,6 @@
     <div class="node-title">
       {data?.label ?? 'Unnamed Node'}
     </div>
-
-    {#if data?.componentName}
-      <div class="component-info">
-        <small>Component: {data.componentName}</small>
-      </div>
-    {/if}
 
     {#if data?.modeName}
       <div class="mode-info">

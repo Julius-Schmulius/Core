@@ -17,10 +17,8 @@
   import '@xyflow/svelte/dist/style.css';
   import { onMount } from 'svelte';
 
-  // import schema tree component
-  import TreeComponent from './TreeComponent.svelte';
-
   // import custom components
+  import TreeComponent from './TreeComponent.svelte';
   import NodeWithItems from './NodeWithItems.svelte';
   import ItemNode from './ItemNode.svelte';
   import ButtonEdge from './ButtonEdge.svelte';
@@ -33,15 +31,31 @@
   import LeafNode from './LeafNode.svelte';
   import ResetViewButton from './ResetViewButton.svelte';
 
-  import componentConfigJson from './componentConfig.json';
+  // import file helpers for config management
+  import { 
+    downloadAllConfigs, 
+    createEmptyConfig, 
+    createEmptyPositions,
+    // uploadJsonFile,
+    loadConfigsFromDownloads,
+    type ConfigFile,
+    type PositionFile
+  } from './Services/fileHelpers';
+  
   import componentManifestJson from './componentManifest.json';
 
-  // component data sources
-  let componentConfig = componentConfigJson;
+  // separate configs for edit/view modes
+  let componentConfig_edit: ConfigFile = createEmptyConfig();
+  let componentConfig_view: ConfigFile = createEmptyConfig();
+  let componentPositions: PositionFile = createEmptyPositions();
+  
   const componentManifest = componentManifestJson;
 
   // schema nodes from treecomponent
   let schemaNodes: any[] = [];
+
+  let editModeNodes: Node[] = [];
+  let viewModeNodes: Node[] = [];
 
   // initial interaction mode
   let currentInteractionMode = 'edit';
@@ -54,15 +68,45 @@
   let showModeChangeWarning = false;
   let pendingInteractionMode = '';
 
+  let showCancelWarning = false;
+  
+  // delete confirmation dialog state
+  let showDeleteWarning = false;
+  let nodeToDelete: Node | null = null;
+
   // init counter for forcing node updates
   let nodeVersion = 0;
 
   // track last node state
   let lastNodesSnapshot = '';
 
-  // set mode 
-  onMount(() => {
-    const firstComponent = componentConfig?.components?.[0];
+  // load configs from file and apply component position & edges reconstruct on mount
+  onMount(async () => {
+    try {
+      const loaded = await loadConfigsFromDownloads();
+      
+      if (loaded) {
+        componentConfig_edit = loaded.edit;
+        componentConfig_view = loaded.view;
+        componentPositions = loaded.positions;
+        
+        editModeNodes = [];
+        viewModeNodes = [];
+        
+        // apply saved positions to components once loaded
+        forceNodeUpdate();
+        setTimeout(() => {
+          applyPositionsToNodes();
+          reconstructEdgesForMode('edit'); // load only edit edges (view loads on mode switch)
+        }, 500);
+      }
+    } catch (error) {
+      // silent fail
+    }
+    
+
+    // set initial sub-mode based on first manifest component
+    const firstComponent = getCurrentConfig()?.components?.[0];
     if (firstComponent?.mode?.mode_name) {
       const manifestModes = componentManifest?.modes?.edit || [];
       const foundMode = manifestModes.find((mode: any) => mode.mode_name === firstComponent.mode.mode_name);
@@ -73,8 +117,262 @@
     }
   });
 
+  // get current config based on interaction mode
+  function getCurrentConfig(): ConfigFile {
+    return currentInteractionMode === 'edit' ? componentConfig_edit : componentConfig_view;
+  }
+
+  // if a component config changes update the stored config
+  function handleConfigChange(updatedConfig: any) {
+
+    if (currentInteractionMode === 'edit') {
+      updatedConfig.components.forEach((updatedComp: any) => {
+        
+        const existingIndex = componentConfig_edit.components.findIndex(
+          (c: any) => c.meta.component_ui_id === updatedComp.meta.component_ui_id
+        );
+        
+        if (existingIndex >= 0) {
+          // update existing component
+          componentConfig_edit.components[existingIndex] = updatedComp;
+        } else {
+          // add new component
+          componentConfig_edit.components.push(updatedComp);
+        }
+      });
+
+      componentConfig_edit = { ...componentConfig_edit };
+
+    } else {
+      // same for view mode
+      updatedConfig.components.forEach((updatedComp: any) => {
+        const existingIndex = componentConfig_view.components.findIndex(
+          (c: any) => c.meta.component_ui_id === updatedComp.meta.component_ui_id
+        );
+        
+        if (existingIndex >= 0) {
+          componentConfig_view.components[existingIndex] = updatedComp;
+        } else {
+          componentConfig_view.components.push(updatedComp);
+        }
+      });
+      
+      componentConfig_view = { ...componentConfig_view };
+    }
+  }
+  
+  // apply saved component positions to nodes
+  function updatePositionsFromNodes() {
+    const currentNodes = get(nodes);
+    
+    currentNodes.forEach(node => {
+      if (node.type === 'nodeWithItems') {
+        componentPositions[node.id] = {
+          x: Math.round(node.position.x),
+          y: Math.round(node.position.y)
+        };
+      }
+    });
+  }
+  
+  // builds the component config object data from a node + edges, which will get saved to config files
+  function buildComponentData(node: Node): any {
+    if (!node || !node.data) return null;
+
+    // structure as in config files
+    const componentData: any = {
+      meta: {
+        component_name: node.data.componentName || componentManifest.meta.component_name,
+        component_ui_id: node.id
+      },
+      globalSettings: {
+        interaction_mode: node.data.interactionMode || currentInteractionMode,
+        anchorpoint: node.data.anchorpoint || '',
+        globalsetting: []
+      },
+      mode: {
+        mode_name: node.data.modeName || '',
+        settings: {
+          setting: []
+        },
+        variables: {
+          variable: []
+        }
+      }
+    };
+
+    const modeKey = node.data.interactionMode || currentInteractionMode;
+    const manifestModes = componentManifest?.modes?.[modeKey as string] || [];
+    const manifestMode = manifestModes.find((m: any) => m.mode_name === node.data.modeName);
+    const currentConfigRef = modeKey === 'edit' ? componentConfig_edit : componentConfig_view;
+    
+    const existingComponent = currentConfigRef.components?.find((c: any) => 
+      c.meta.component_ui_id === node.id
+    );
+    
+    // global settings
+    const manifestGlobalSettings = componentManifest?.globalSettings?.globalsetting || [];
+    const configGlobalSettings = existingComponent?.globalSettings?.globalsetting || [];
+    
+    // cycle through manifest global settings and fill from config or default
+    componentData.globalSettings.globalsetting = manifestGlobalSettings.map((mgs: any) => {
+      const cgs = configGlobalSettings.find((s: any) => s.target_variable === mgs.target_variable);
+      return {
+        target_variable: mgs.target_variable,
+        value: String(cgs?.value ?? mgs.default_value?.value ?? '')
+      };
+    });
+    
+    // same for submode settings
+    if (manifestMode?.settings?.setting) {
+      const configSettings = existingComponent?.mode?.settings?.setting || [];
+      componentData.mode.settings.setting = manifestMode.settings.setting.map((ms: any) => {
+        const cs = configSettings.find((s: any) => s.target_variable === ms.target_variable);
+        return {
+          target_variable: ms.target_variable,
+          value: String(cs?.value ?? ms.default_value?.value ?? '')
+        };
+      });
+    }
+
+    // get existing variables from config
+    const existingVariables = existingComponent?.mode?.variables?.variable || [];
+    const componentVariables = Array.isArray(node.data.componentVariables) ? node.data.componentVariables : [];
+    
+    const allEdges = get(edges);
+    const processedVariables = new Set<string>(); // track processed variables
+
+    // process each component variable and find connected edges
+    componentVariables.forEach((variable: any) => {
+      const variableId = variable.target_variable;
+      const sourceHandle = `${node.id}-${variableId}-handle`;
+
+      const connectedEdges = allEdges.filter(
+        (edge: Edge) => edge.sourceHandle === sourceHandle || edge.targetHandle === sourceHandle
+      );
+
+      // case 1: has edges > create from edge data
+      if (connectedEdges.length > 0) {
+        connectedEdges.forEach((connectedEdge: Edge) => {
+          const targetNode = get(nodes).find((n: Node) => n.id === connectedEdge.target);
+          
+          if (targetNode && targetNode.data) {
+            let jsonPath = '';
+            
+            if (targetNode.data.jsonPath) {
+              jsonPath = String(targetNode.data.jsonPath);
+            } else if (targetNode.data.path) {
+              jsonPath = `$.${targetNode.data.path}`;
+            } else if (targetNode.data.label) {
+              jsonPath = `$.${targetNode.data.label}`;
+            }
+            
+            const variableData: any = {
+              target_variable: variable.target_variable,
+              is_input: connectedEdge.data?.rightDirection || false,
+              is_output: connectedEdge.data?.leftDirection || false,
+              type: variable.type,
+              JSONPath: jsonPath,
+              is_visible: targetNode.data.is_visible !== false
+            };
+
+            // transfer regex from existingVariables
+            const existingVar = existingVariables.find((v: any) => 
+              v.target_variable === variable.target_variable
+            );
+            
+            // write regex if exist
+            if (existingVar) {
+              if (existingVar.input_regex) {
+                variableData.input_regex = existingVar.input_regex;
+              }
+              if (existingVar.output_regex) {
+                variableData.output_regex = existingVar.output_regex;
+              }
+            }
+
+            componentData.mode.variables.variable.push(variableData);
+            processedVariables.add(variable.target_variable);
+          }
+        });
+      }
+    });
+
+    // case 2: variables without edges but with regex in config
+    existingVariables.forEach((existingVar: any) => {
+      if (!processedVariables.has(existingVar.target_variable)) {
+        // variable has no edges but might have regex
+        if (existingVar.input_regex || existingVar.output_regex) {
+          componentData.mode.variables.variable.push({
+            ...existingVar
+          });
+        }
+      }
+    });    
+    return componentData;
+  }
+  
+  // extract mappings for a given node (NOT USED)
+  function extractMappingsForNode(node: any): any[] {
+    const currentEdges = get(edges);
+    const mappings: any[] = [];
+    
+    node.data.componentVariables?.forEach((variable: any) => {
+      const handleId = `${node.id}-${variable.target_variable}-handle`;
+      
+      const connectedEdges = currentEdges.filter(edge => 
+        edge.sourceHandle === handleId || edge.targetHandle === handleId
+      );
+      
+      if (connectedEdges.length > 0) {
+
+        connectedEdges.forEach(edge => {
+          const isSource = edge.sourceHandle === handleId;
+          const schemaNodeId = isSource ? edge.target : edge.source;
+          const jsonPath = buildJsonPathFromSchemaNode(schemaNodeId);
+          
+          const mapping: any = {
+            target_variable: variable.target_variable,
+            type: variable.type || 'string',
+            is_visible: true,
+            JSONPath: jsonPath,
+            is_input: edge.data?.rightDirection || false,
+            is_output: edge.data?.leftDirection || false
+          };
+          
+          // add regex if exist
+          if (edge.data?.inputRegex) mapping.input_regex = edge.data.inputRegex;
+          if (edge.data?.outputRegex) mapping.output_regex = edge.data.outputRegex;
+          
+          mappings.push(mapping);
+        });
+      } else {
+
+        mappings.push({
+          target_variable: variable.target_variable,
+          type: variable.type || 'string',
+          is_visible: true,
+          is_input: false,
+          is_output: false
+        });
+      }
+    });
+    
+    return mappings;
+  }
+  
+  // build jsonpath from schema node id (NOT USED)
+  function buildJsonPathFromSchemaNode(nodeId: string): string {
+    if (nodeId.startsWith('schema-')) {
+      let path = nodeId.replace('schema-', '');
+      path = path.replace(/^(leaf|section)-/, '');
+      path = path.replace(/-/g, '.');
+      return `$.${path}`;
+    }
+    return '$';
+  }
+
   function updateInteractionModeInConfig(newMode: string) {
-    // console.log('triggering display filter for mode:', newMode);
     forceNodeUpdate();
   }
 
@@ -90,10 +388,20 @@
     applyInteractionModeChange(newMode);
   }
 
+  // switches between edit/view modes and saves current components, updates sidebar, rebuilds connections
   function applyInteractionModeChange(newMode: string) {
-    console.log('changing interaction mode from', currentInteractionMode, 'to', newMode);
+    const currentNodes = get(nodes);
+    if (currentInteractionMode === 'edit') {
+      editModeNodes = currentNodes.filter(n => 
+        n.type === 'nodeWithItems' && n.data?.interactionMode === 'edit'
+      );
+    } else {
+      viewModeNodes = currentNodes.filter(n => 
+        n.type === 'nodeWithItems' && n.data?.interactionMode === 'view'
+      );
+    }
     
-    currentInteractionMode = newMode;
+    currentInteractionMode = newMode; // switch mode
     updateInteractionModeInConfig(newMode);
     
     if (sidebarMode === 'edit') {
@@ -101,19 +409,33 @@
       selectedNode.set(null);
     }
     
+    // get manifest submodes for new interaction mode
     const newModes = componentManifest?.modes?.[newMode];
     if (newModes && newModes.length > 0) {
       selectedMode = newModes[0];
-      console.log('selectedMode updated == first mode of new interaction mode:', selectedMode);
     } else {
       selectedMode = null;
-      console.log('no modes available for interaction mode:', newMode);
     }
     
     forceNodeUpdate();
-
+    
+    // set timeout to check nodes updated
     setTimeout(() => {
-      filterEdgesForInteractionMode();
+      const updatedNodes = get(nodes);
+      const modesMatch = updatedNodes
+        .filter(n => n.type === 'nodeWithItems')
+        .every(n => n.data?.interactionMode === newMode);
+      
+      // reconstruct edges only if nodes updated correctly
+      if (modesMatch && (newMode === 'edit' || newMode === 'view')) {
+        reconstructEdgesForMode(newMode);
+      } else {
+        setTimeout(() => {
+          if (newMode === 'edit' || newMode === 'view') {
+            reconstructEdgesForMode(newMode);
+          }
+        }, 200);
+      }
     }, 100);
   }
 
@@ -128,34 +450,370 @@
     pendingInteractionMode = '';
   }
 
-  // save/cancel handlers for edit buttons
+  // save all component configurations and positions from both modes and download files
+
   function handleSaveEdit() {
-    console.log('save button clicked');
-    // TODO: implement save functionality
+    const currentNodes = get(nodes);
+    
+    // collect all nodes from both modes
+    const allEditNodes = [
+      ...editModeNodes,
+      ...currentNodes.filter(n => 
+        n.type === 'nodeWithItems' &&  n.data?.interactionMode === 'edit' && !editModeNodes.find(existing => existing.id === n.id)
+      )
+    ];
+    
+    const allViewNodes = [
+      ...viewModeNodes,
+      ...currentNodes.filter(n => 
+        n.type === 'nodeWithItems' && n.data?.interactionMode === 'view' && !viewModeNodes.find(existing => existing.id === n.id)
+      )
+    ];
+
+    // deduplicate nodes by id
+    const editNodesMap = new Map<string, Node>();
+    allEditNodes.forEach(node => editNodesMap.set(node.id, node));
+    editModeNodes = Array.from(editNodesMap.values());
+    
+    const viewNodesMap = new Map<string, Node>();
+    allViewNodes.forEach(node => viewNodesMap.set(node.id, node));
+    viewModeNodes = Array.from(viewNodesMap.values());
+
+    // save positions for all components
+    const allComponentNodes = [...editModeNodes, ...viewModeNodes];
+    allComponentNodes.forEach(node => {
+      componentPositions[node.id] = {
+        x: Math.round(node.position.x),
+        y: Math.round(node.position.y)
+      };
+    });
+    
+    // update or add edit components to config
+    editModeNodes.forEach(node => {
+      const compIdx = componentConfig_edit.components.findIndex(
+        (c: any) => c.meta.component_ui_id === node.id
+      );
+      
+      // if component exists update variables
+      if (compIdx >= 0) {
+        const componentData = buildComponentData(node);
+        if (componentData) {
+          // merge instead of overwrite
+          const existingVariables = componentConfig_edit.components[compIdx].mode.variables.variable || [];
+          const newVariables = componentData.mode.variables.variable;
+          
+          const mergedVariables = newVariables.map((newVar: any) => {
+            const existing = existingVariables.find((v: any) => 
+              v.target_variable === newVar.target_variable
+            );
+            
+            // keep existing regex if present
+            if (existing) {
+              return {
+                ...newVar,
+                input_regex: existing.input_regex || newVar.input_regex,
+                output_regex: existing.output_regex || newVar.output_regex
+              };
+            }
+            
+            return newVar;
+          });
+          
+          componentConfig_edit.components[compIdx].mode.variables.variable = mergedVariables;
+        }
+      } else {
+        // add new component if missing
+        const componentData = buildComponentData(node);
+        if (componentData) {
+          componentConfig_edit.components.push(componentData);
+        }
+      }
+    });
+    
+    // update or add view components
+    viewModeNodes.forEach(node => {
+      const compIdx = componentConfig_view.components.findIndex(
+        (c: any) => c.meta.component_ui_id === node.id
+      );
+      
+      if (compIdx >= 0) {
+        const componentData = buildComponentData(node);
+        if (componentData) {
+          componentConfig_view.components[compIdx].mode.variables = componentData.mode.variables;
+        }
+      } else {
+        // add new component if missing
+        const componentData = buildComponentData(node);
+        if (componentData) {
+          componentConfig_view.components.push(componentData);
+        }
+      }
+    });
+
+    // force config reactivity
+    componentConfig_edit = { ...componentConfig_edit };
+    componentConfig_view = { ...componentConfig_view };
+
+    downloadAllConfigs(componentConfig_edit, componentConfig_view, componentPositions);
+    
+    alert(`Configuration saved!
+
+    EDIT Mode: ${componentConfig_edit.components.length} component(s)
+    VIEW Mode: ${componentConfig_view.components.length} component(s)
+    Positions: ${Object.keys(componentPositions).length} saved
+    
+    Files downloaded:
+    - componentConfig_edit.json
+    - componentConfig_view.json
+    - componentPositions.json`);
   }
 
   function handleCancelEdit() {
-    console.log('cancel button clicked');
-    // TODO: implement cancel functionality
+    showCancelWarning = true;
   }
+  
+  function confirmCancel() {
+    sidebarMode = 'overview';
+    activeTab = 0;
+    showCancelWarning = false;
+  }
+  
+  function rejectCancel() {
+    showCancelWarning = false;
+  }
+  
+  function handleDeleteComponent() {
+    if (!$selectedNode) return;
+    nodeToDelete = $selectedNode;
+    showDeleteWarning = true;
+  }
+  
+  // confirm deletion of component node and related data /edges
+  function confirmDelete() {
+    if (!nodeToDelete) return;
+    
+    const nodeId = nodeToDelete.id;
+    nodes.update(allNodes => allNodes.filter(n => n.id !== nodeId));
+    
+    // remove from edit/view modes arrays
+    if (nodeToDelete.data?.interactionMode === 'edit') {
+      editModeNodes = editModeNodes.filter(n => n.id !== nodeId);
+    } else {
+      viewModeNodes = viewModeNodes.filter(n => n.id !== nodeId);
+    }
+
+    // remove from edit/view config objects
+    componentConfig_edit.components = componentConfig_edit.components.filter(
+      (c: any) => c.meta.component_ui_id !== nodeId
+    );
+    
+    componentConfig_view.components = componentConfig_view.components.filter(
+      (c: any) => c.meta.component_ui_id !== nodeId
+    );
+    
+    delete componentPositions[nodeId]; // remove from positions
+    
+    // remove related edges from store
+    edges.update(allEdges => allEdges.filter(edge => {
+      const sourceMatch = edge.source === nodeId || edge.sourceHandle?.startsWith(nodeId + '-');
+      const targetMatch = edge.target === nodeId || edge.targetHandle?.startsWith(nodeId + '-');
+      return !sourceMatch && !targetMatch;
+    }));
+    
+    componentConfig_edit = { ...componentConfig_edit };
+    componentConfig_view = { ...componentConfig_view };
+    
+    sidebarMode = 'empty';
+    selectedNode.set(null);
+    showDeleteWarning = false;
+    nodeToDelete = null;
+  }
+  
+  function rejectDelete() {
+    showDeleteWarning = false;
+    nodeToDelete = null;
+  }
+  
+  // save all but no settings (NOT USED)
+  function handleSaveMappingsOnly() {
+
+    updatePositionsFromNodes();
+
+    const currentNodes = get(nodes);
+    currentNodes.forEach(node => {
+      if (node.type === 'nodeWithItems') {
+        const componentData = buildComponentData(node);
+        const currentConfig = getCurrentConfig();
+        
+        const existingIndex = currentConfig.components.findIndex(
+          (c: any) => c.meta.component_name === node.data.componentName
+        );
+        
+        if (existingIndex >= 0) {
+          // only update variables keep other settings
+          currentConfig.components[existingIndex].mode.variables = componentData.mode.variables;
+        }
+      }
+    });
+    
+    // download all configs
+    downloadAllConfigs(componentConfig_edit, componentConfig_view, componentPositions);
+    
+    // alert('Mappings saved!');
+  }
+
+  // apply loaded positions to nodes via ID
+  function applyPositionsToNodes() {
+    nodes.update(allNodes => allNodes.map(node => {
+      if (componentPositions[node.id]) {
+        return {
+          ...node,
+          position: componentPositions[node.id]
+        };
+      }
+      return node;
+    }));
+  }
+  
+  
+  // find schema node by JSONPath for edge creation
+  function findSchemaNodeByJsonPath(jsonPath: string, allNodes: Node[]): Node | null {
+    // remove leading "$."
+    const cleanPath = jsonPath.replace(/^\$\./, '');
+    
+    const directMatch = allNodes.find(n => 
+      n.type === 'leafNode' && n.data?.path === cleanPath
+    );
+    
+    if (directMatch) {
+      return directMatch;
+    }
+    
+    // fallback: match by last part of path
+    const pathParts = cleanPath.split('.');
+    const leafName = pathParts[pathParts.length - 1];
+    
+    // return first matching leaf node
+    return allNodes.find(n => 
+      n.type === 'leafNode' && n.data?.label === leafName && typeof n.data?.path === 'string' && n.data.path === cleanPath
+    ) || null;
+  }
+  
+  // reconstruct edges for each node of a given interaction mode on mode change
+  function reconstructEdgesForMode(mode: 'edit' | 'view') {
+    const currentNodes = get(nodes);
+    const config = mode === 'edit' ? componentConfig_edit : componentConfig_view;
+    const existingEdges = get(edges);
+    const existingIds = new Set(existingEdges.map(e => e.id));
+    const newEdges: Edge[] = [];
+
+    // create edges based on component variable mappings & filter components with current mode
+    config.components?.filter((c: any) => c.globalSettings?.interaction_mode === mode).forEach((component: any) => {
+        const componentNode = currentNodes.find(n =>
+          n.id === component.meta.component_ui_id && n.type === 'nodeWithItems' && n.data?.interactionMode === mode
+        );
+        if (!componentNode) return;
+
+        // create edges for each variable
+        component.mode?.variables?.variable?.forEach((variable: any) => {
+          if (!variable.JSONPath) return;
+          const schemaNode = findSchemaNodeByJsonPath(variable.JSONPath, currentNodes);
+          if (!schemaNode) return;
+
+          const sourceHandle = `${componentNode.id}-${variable.target_variable}-handle`;
+          const targetHandle = `${schemaNode.id}-handle`;
+          const edgeId = `${sourceHandle}-${schemaNode.id}`;
+
+          // add new edge if it doesn't exist
+          if (!existingIds.has(edgeId)) {
+            newEdges.push({
+              id: edgeId,
+              source: componentNode.id,
+              target: schemaNode.id,
+              sourceHandle,
+              targetHandle,
+              type: 'button',
+              animated: false,
+              style: 'stroke: #007acc; stroke-width: 2px;',
+              markerEnd: variable.is_output ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
+              markerStart: variable.is_input ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
+              data: {
+                leftDirection: variable.is_output || false,
+                rightDirection: variable.is_input || false,
+                sourceHandleId: sourceHandle,
+                targetHandleId: targetHandle,
+                sourceMode: mode
+              }
+            });
+          }
+
+          // update leafnode connected to this variable and set visibility from config
+          nodes.update(ns => ns.map(n =>
+            n.id === schemaNode.id && n.type === 'leafNode'
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    is_visible: variable.is_visible !== false,
+                    edges,
+                    nodes,
+                    activeInteractionMode: currentInteractionMode,
+                    onToggleVisibility: handleToggleLeafVisibility,
+                    onSetAnchorpoint: handleSetAnchorpoint
+                  }
+                }
+              : n
+          ));
+        });
+      });
+
+    if (newEdges.length > 0) {
+      edges.set([...existingEdges, ...newEdges]);
+    }
+
+    // timeout to ensure nodes are updated
+    setTimeout(() => {
+      nodes.update(ns => ns.map(n =>
+        n.type === 'leafNode'
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                edges,
+                nodes,
+                onToggleVisibility: handleToggleLeafVisibility,
+                onSetAnchorpoint: handleSetAnchorpoint
+              }
+            }
+          : n
+      ));
+    }, 50);
+  }
+
+  // merge schema nodes with existing UI state, preserves user changes (visibility toggle...)
+  const enhancedSchemaNodes = schemaNodes.map(sn => {
+    if (sn.type === 'leafNode') {
+      const existing = $nodes.find(n => n.id === sn.id);
+      const mergedData = existing ? { ...sn.data, ...existing.data } : sn.data;
+      return {
+        ...sn,
+        data: {
+          ...mergedData,
+          edges,
+          nodes,
+          activeInteractionMode: currentInteractionMode,
+          onToggleVisibility: handleToggleLeafVisibility,
+          onSetAnchorpoint: handleSetAnchorpoint
+        }
+      };
+    }
+    return sn;
+  });
 
   $: componentVariables = selectedMode?.variables?.variable || [];
   $: componentSettings = selectedMode?.settings?.setting || [];
 
-  $: {
-    console.log('=== reactive update ===');
-    console.log('selectedmode:', selectedMode?.mode_name);
-    console.log('componentvariables:', componentVariables);
-    console.log('componentvariables length:', componentVariables.length);
-    if (componentVariables.length > 0) {
-      console.log('variables details:', componentVariables.map((v: any) => ({ 
-        target: v.target_variable, 
-        input: v.is_input, 
-        output: v.is_output 
-      })));
-    }
-  }
-
+  // layout constants
   const childWidth = 140;
   const childHeight = 60;
   const colGap = 20;
@@ -166,186 +824,336 @@
   $: parentWidth = Math.max(320, childWidth + 80);
   $: parentHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
 
+  // force node update by incrementing version > triggers reactive updates
   function forceNodeUpdate() {
     nodeVersion++;
-    console.log('force node update, version:', nodeVersion);
   }
 
+  // svelte stores for selected-/ nodes & edges
   let nodes: Writable<Node[]> = writable([]);
   let edges: Writable<Edge[]> = writable([]);
   let selectedNode: Writable<Node | null> = writable(null);
   let selectedEdge: Writable<Edge | null> = writable(null);
+  // sidebar state and selected tab
   let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
   let activeTab = 0;
 
-  // handle schema nodes generation from treecomponent
+  // receive and store generated schema nodes from tree component
   function handleSchemaNodesGenerated(event: any) {
     const generatedNodes = event.detail.nodes || [];
-    console.log('received schema nodes from treecomponent:', generatedNodes.length);
     schemaNodes = generatedNodes;
   }
 
   // dynamically create nodes
-  $: configNodes = createConfigNodes(currentInteractionMode, componentConfig, componentManifest, nodeVersion);
+  $: configNodes = createConfigNodes(currentInteractionMode, getCurrentConfig(), componentManifest, nodeVersion, editModeNodes, viewModeNodes);
 
-  function createConfigNodes(interactionMode?: string, config?: any, manifest?: any, version?: number): Node[] {
-    const components = config?.components || componentConfig?.components;
+  // function to create config nodes on start or mode change based on config / saved nodes
+  function createConfigNodes(
+    interactionMode?: string, 
+    config?: any, 
+    manifest?: any, 
+    version?: number,
+    savedEditNodes?: Node[],
+    savedViewNodes?: Node[]
+  ): Node[] {
+    const currentMode = interactionMode || currentInteractionMode;
+    
+    // use saved nodes if available (edit / view)
+    if (currentMode === 'edit' && savedEditNodes && savedEditNodes.length > 0) {
+      return savedEditNodes.map(n => ({
+        ...n,
+        data: { ...n.data, edges: get(edges), version }
+      }));
+    }
+    
+    if (currentMode === 'view' && savedViewNodes && savedViewNodes.length > 0) {
+      return savedViewNodes.map(n => ({
+        ...n,
+        data: { ...n.data, edges: get(edges), version }
+      }));
+    }
+    
+    const components = config?.components || [];
     if (!components || !Array.isArray(components)) return [];
     
-    const currentMode = interactionMode || currentInteractionMode;
     const currentManifest = manifest || componentManifest;
     const configNodesArray: Node[] = [];
-    //const existingNodes = get(nodes);
     
+    // create nodes for each component in config matching current interaction mode
     components.forEach((component: any, index: number) => {
-      console.log('checking component with interaction_mode:', component.globalSettings?.interaction_mode, 'current mode:', currentMode);
-      if (component.globalSettings?.interaction_mode === currentMode) {
-        const manifestModes = currentManifest?.modes?.[currentMode] || [];
-        const modeDetails = manifestModes.find((mode: any) => mode.mode_name === component.mode?.mode_name);
-        
-        if (modeDetails) {
-          const modeVariables = modeDetails.variables?.variable || [];
-          
-          const childItems = modeVariables.map((variable: any) => ({
-            id: variable.target_variable,
-            label: variable.target_variable,
-            isInput: variable.is_input,
-            isOutput: variable.is_output,
-            type: variable.type
-          }));
-
-          const rows = Array.isArray(modeVariables) ? modeVariables.length : 0;
-          const nodeWidth = Math.max(320, childWidth + 80);
-          const nodeHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
-
-          const nodeId = `config-component-${index}`;
-          const position = { x: 400 + (index * 200), y: 100 };
-          
-          const node = {
-            id: `config-component-${index}`,
-            type: 'nodeWithItems',
-            data: {
-              label: modeDetails.mode_name || component.meta.component_name,
-              componentId: component.meta.component_name,
-              componentName: component.meta.component_name,
-              modeName: modeDetails.mode_name || '',
-              interactionMode: currentMode,
-              childItems: childItems,
-              componentVariables: modeVariables,
-              edges: [],
-              version: version || nodeVersion
-            },
-            position: position,
-            style: `width: ${nodeWidth}px; height: ${nodeHeight}px;`,
-            selectable: true,
-            deletable: false,
-            selected: false,
-            zIndex: 0,
-            dragging: false,
-            draggable: true
-          };
-          
-          configNodesArray.push(node);
-          console.log('added config node:', node.id, 'for mode:', currentMode);
-        }
+      if (component.globalSettings?.interaction_mode !== currentMode) {
+        return;
       }
+      
+      const manifestModes = currentManifest?.modes?.[currentMode] || [];
+      const modeDetails = manifestModes.find((mode: any) => mode.mode_name === component.mode?.mode_name);
+      
+      if (!modeDetails) {
+        return;
+      }
+      
+      // extract variables for child items
+      const modeVariables = modeDetails.variables?.variable || [];
+      const childItems = modeVariables.map((variable: any) => ({
+        id: variable.target_variable,
+        label: variable.target_variable,
+        isInput: variable.is_input,
+        isOutput: variable.is_output,
+        type: variable.type
+      }));
+
+      const rows = modeVariables.length;
+      const nodeWidth = Math.max(320, childWidth + 80);
+      const nodeHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
+
+      // search for existing position via component_ui_id
+      const nodeId = component.meta.component_ui_id;
+      let position = { x: 400 + (index * 200), y: 100 }; // default position
+
+      if (componentPositions[nodeId]) {
+        position = componentPositions[nodeId]; // saved position
+      }
+
+      // create node object
+      const node = {
+        id: nodeId,
+        type: 'nodeWithItems',
+        data: {
+          label: `${component.meta.component_name}`,
+          componentName: component.meta.component_name,
+          componentId: nodeId,
+          modeName: component.mode?.mode_name || '',
+          interactionMode: currentMode,
+          childItems: childItems,
+          componentVariables: modeVariables,
+          edges: [],
+          version: version || nodeVersion,
+          anchorpoint: component.globalSettings?.anchorpoint || ''
+        },
+        position: position,
+        style: `width: ${nodeWidth}px; height: ${nodeHeight}px;`,
+        selectable: true,
+        deletable: true,
+        selected: false,
+        zIndex: 0,
+        dragging: false,
+        draggable: true
+      };
+      
+      configNodesArray.push(node);
     });
 
-    // console.log('created', configNodesArray.length, 'nodes for mode:', currentMode);
     return configNodesArray;
   }
 
-  function filterEdgesForInteractionMode() {
-    const currentEdges = get(edges);
-    const currentNodes = get(nodes);
-    
-    // console.log('=== filtering edges for interaction mode ===');
-    // console.log('current mode:', currentInteractionMode);
-    // console.log('edges before filter:', currentEdges.length);
-    
-    const filteredEdges = currentEdges.filter(edge => {
+  // toggle visibility of leaf node and update connected component variable visibility
+  function handleToggleLeafVisibility(leafNodeId: string) {
+    nodes.update(allNodes => allNodes.map(node => {
+      if (node.id === leafNodeId && node.type === 'leafNode') {
+        const newIsVisible = !(node.data?.is_visible !== false);
+        const updatedNode = {
+          ...node,
+          data: {
+            ...node.data,
+            is_visible: newIsVisible, // new visibility state
+            edges,
+            nodes,
+            onToggleVisibility: handleToggleLeafVisibility,
+            onSetAnchorpoint: handleSetAnchorpoint
+          }
+        };
 
-      const sourceNode = currentNodes.find(n => n.id === edge.source);
-      const targetNode = currentNodes.find(n => n.id === edge.target);
-      const sourceIsComponent = sourceNode?.id?.startsWith('config-component-') || sourceNode?.id?.startsWith('library-component-');
-      const targetIsComponent = targetNode?.id?.startsWith('config-component-') || targetNode?.id?.startsWith('library-component-');
+        const currentEdges = get(edges);
+        const handleId = `${leafNodeId}-handle`;
+        const connectedEdges = currentEdges.filter((edge: any) =>
+          edge.sourceHandle === handleId || edge.targetHandle === handleId
+        );
 
-      if (sourceIsComponent) {
-        const nodeInteractionMode = sourceNode?.data?.interactionMode;
-        if (nodeInteractionMode && nodeInteractionMode !== currentInteractionMode) {
-          return false;
-        }
+        // update for each connected component variable visibility
+        connectedEdges.forEach((edge: any) => {
+          const componentId = edge.source.startsWith('config-component-') ? edge.source : edge.target;
+          const nodePath = node.data?.path;
+          if (typeof nodePath === 'string') {
+            updateComponentVariableVisibility(componentId, nodePath, newIsVisible);
+          }
+        });
+
+        return updatedNode;
       }
-
-      if (targetIsComponent) {
-        const nodeInteractionMode = targetNode?.data?.interactionMode;
-        if (nodeInteractionMode && nodeInteractionMode !== currentInteractionMode) {
-          return false;
-        }
-      }
-      
-      return true;
-    });
-    
-    // console.log('edges after filter:', filteredEdges.length);
-    edges.set(filteredEdges);
+      return node;
+    }));
   }
 
-  let libraryNodes: Writable<Node[]> = writable([]);
+  // set anchorpoint JSONPath for a component
+  function handleSetAnchorpoint(componentId: string, jsonPath: string) {
+    
+    nodes.update(ns => ns.map(n => { // update node data
+      if (n.id === componentId) {
+        return { ...n, data: { ...n.data, anchorpoint: jsonPath } };
+      }
+      return n;
+    }));
 
-  $: filteredLibraryNodes = $libraryNodes.filter(node => {
-    return node.data?.interactionMode === currentInteractionMode;
-  });
+    // update selected node
+    const sel = get(selectedNode);
+    if (sel?.id === componentId) {
+      const updated = get(nodes).find(n => n.id === componentId);
+      if (updated) selectedNode.set(updated);
+    }
 
-  // merge all nodes & replace parameter nodes with schema nodes reactively
+    // update in config
+    const currentConfig = getCurrentConfig();
+    const componentIndex = currentConfig.components.findIndex(
+      (c: any) => c.meta.component_ui_id === componentId
+    );
+
+    // set new anchorpoint if component found
+    if (componentIndex >= 0) {
+      currentConfig.components[componentIndex].globalSettings.anchorpoint = jsonPath;
+      if (currentInteractionMode === 'edit') {
+        componentConfig_edit = { ...componentConfig_edit };
+      } else {
+        componentConfig_view = { ...componentConfig_view };
+      }
+    }
+
+    // refresh leaf props so anchor icon updates
+    setTimeout(() => {
+      nodes.update(ns => ns.map(n => {
+        if (n.type === 'leafNode') {
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              edges,
+              nodes,
+              onToggleVisibility: handleToggleLeafVisibility,
+              onSetAnchorpoint: handleSetAnchorpoint
+            }
+          };
+        }
+        return n;
+      }));
+    }, 30);
+  }
+
+  // sets is_visible for a component variable based on leaf path
+  function updateComponentVariableVisibility(componentId: string, leafPath: string, isVisible: boolean) {
+    const jsonPath = `$.${leafPath}`;
+    const currentConfig = getCurrentConfig();
+    // filter any component by id
+    const componentIndex = currentConfig.components.findIndex(
+      (c: any) => c.meta.component_ui_id === componentId
+    );
+
+    if (componentIndex >= 0) {
+      const vars = currentConfig.components[componentIndex].mode?.variables?.variable || []; // all component variables
+      const vi = vars.findIndex((v: any) => v.JSONPath === jsonPath); // variable with matching jsonpath
+
+      // update visibility if variable found
+      if (vi >= 0) {
+        vars[vi].is_visible = isVisible; // new visibility state
+        if (currentInteractionMode === 'edit') {
+          componentConfig_edit = { ...componentConfig_edit };
+        } else {
+          componentConfig_view = { ...componentConfig_view };
+        }
+      }
+    }
+  }
+
+  // reactive block: merges component nodes from config with canvas state,
+  // adds schema tree nodes, and updates store only when actual changes detected
   $: {
-    const allNodes: Node[] = [];
+    const allNodes: Node[] = []; // array for store update
     const currentNodes = $nodes;
     
+    // step 1: get all existing component nodes
+    const existingComponentNodes = currentNodes.filter(n => 
+      n.type === 'nodeWithItems' && n.data?.interactionMode === currentInteractionMode
+    );
+    
+    // step 2: create map of config nodes for updates
+    const configNodeMap = new Map<string, Node>(); // map that contains config nodes by ID
     if (configNodes && Array.isArray(configNodes) && configNodes.length > 0) {
-      const updatedConfigNodes = configNodes.map(node => {
-        const existingNode = currentNodes.find(n => n.id === node.id);
-        
-        return {
-          ...node,
-          position: existingNode?.position || node.position,
-          data: {
-            ...node.data,
-            edges: $edges || [],
-            version: nodeVersion,
-            isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
-            isEditMode: isEditingComponent
-          }
-        };
-      });
-      allNodes.push(...updatedConfigNodes);
+      configNodes.filter(node => node.data?.interactionMode === currentInteractionMode).forEach(node => {
+          configNodeMap.set(node.id, node);
+        });
     }
     
-    // replace parameter nodes with schema nodes
+    // step 3: merge using existing nodes, update with config data
+    existingComponentNodes.forEach(existingNode => {
+      const configNode = configNodeMap.get(existingNode.id);
+      
+      if (configNode) {
+        // node exists in config: update with config data
+        allNodes.push({
+          ...configNode,
+          position: existingNode.position,
+          data: {
+            ...configNode.data,
+            anchorpoint: existingNode.data.anchorpoint || configNode.data.anchorpoint || '',
+            edges,
+            version: nodeVersion,
+            isGrayedOut: isEditingComponent && existingNode.id !== $selectedNode?.id && existingNode.data?.interactionMode === currentInteractionMode,
+            isEditMode: isEditingComponent
+          }
+        });
+        configNodeMap.delete(existingNode.id); // delete if already processed
+      } else {
+        // node does NOT exist in config > keep existing node
+        allNodes.push({
+          ...existingNode,
+          data: {
+            ...existingNode.data,
+            edges: $edges || [],
+            version: nodeVersion,
+            isGrayedOut: isEditingComponent && existingNode.id !== $selectedNode?.id && existingNode.data?.interactionMode === currentInteractionMode,
+            isEditMode: isEditingComponent
+          }
+        });
+      }
+    });
+    
+    // step 4: add new config nodes not in nodes store yet
+    configNodeMap.forEach(configNode => {
+      allNodes.push({
+        ...configNode,
+        data: {
+          ...configNode.data,
+          edges: $edges || [],
+          version: nodeVersion,
+          isGrayedOut: isEditingComponent && configNode.id !== $selectedNode?.id && configNode.data?.interactionMode === currentInteractionMode,
+          isEditMode: isEditingComponent
+        }
+      });
+    });
+    
+    // step 5: add schema nodes
     if (schemaNodes && Array.isArray(schemaNodes) && schemaNodes.length > 0) {
-      allNodes.push(...schemaNodes);
-    }
-    
-    if (filteredLibraryNodes && Array.isArray(filteredLibraryNodes)) {
-      const updatedLibraryNodes = filteredLibraryNodes.map(node => {
-        const existingNode = currentNodes.find(n => n.id === node.id);
-        
-        return {
-          ...node,
-          position: existingNode?.position || node.position,
-          data: {
-            ...node.data,
-            edges: $edges || [],
-            version: nodeVersion,
-            isGrayedOut: isEditingComponent && node.id !== $selectedNode?.id && node.data?.interactionMode === currentInteractionMode,
-            isEditMode: isEditingComponent
-          }
-        };
+      const enhancedSchemaNodes = schemaNodes.map(sn => {
+        if (sn.type === 'leafNode') {
+          // check if node already exists in node array
+          const existing = allNodes.find(n => n.id === sn.id);
+          const mergedData = existing ? { ...sn.data, ...existing.data } : sn.data;
+          return {
+            ...sn,
+            data: {
+              ...mergedData,
+              edges,
+              nodes,
+              activeInteractionMode: currentInteractionMode,
+              onToggleVisibility: handleToggleLeafVisibility,
+              onSetAnchorpoint: handleSetAnchorpoint
+            }
+          };
+        }
+        return sn;
       });
-      allNodes.push(...updatedLibraryNodes);
+      allNodes.push(...enhancedSchemaNodes);
     }
     
-    // create snapshot for change detection
+    // create snapshot to detect changes, store update only if changed
     const newSnapshot = JSON.stringify(
       allNodes.map(n => ({
         id: n.id,
@@ -356,7 +1164,6 @@
         isGrayedOut: n.data?.isGrayedOut,
         isEditMode: n.data?.isEditMode,
         selectedNodeId: $selectedNode?.id,
-
         edgesHash: JSON.stringify($edges.map(e => ({
           id: e.id,
           source: e.source,
@@ -371,14 +1178,11 @@
     
     if (newSnapshot !== lastNodesSnapshot) {
       lastNodesSnapshot = newSnapshot;
-      console.log('setting nodes. config nodes count:', configNodes.length);
-      console.log('schema nodes count:', schemaNodes.length);
-      console.log('filtered library nodes count:', filteredLibraryNodes.length);
       nodes.set(allNodes);
     }
   }
 
-  // update edge style based on edit state
+  // update edge style based on editing state (grey out non selected)
   $: {
     if (isEditingComponent && $selectedNode) {
       edges.update(allEdges => allEdges.map(edge => {
@@ -403,15 +1207,6 @@
       })));
     }
   }
-
-  // let nodes: Writable<Node[]> = writable([]);
-  // let edges: Writable<Edge[]> = writable([]);
-
-  // let selectedNode: Writable<Node | null> = writable(null);
-  // let selectedEdge: Writable<Edge | null> = writable(null);
-
-  // let sidebarMode: 'empty' | 'overview' | 'edit' = 'empty';
-  // let activeTab = 0;
 
   // track if user is editing
   $: isEditingComponent = sidebarMode === 'edit' && $selectedNode !== null;
@@ -441,21 +1236,42 @@
     }
   }
 
-  $: currentNodeMode = getCurrentNodeMode();
+  $: currentNodeMode = $selectedNode ? getCurrentNodeMode() : selectedMode; // reactive current submode
+  $: effectivePreviewMode = getEffectivePreviewMode();
 
-  function getCurrentNodeMode() {
-    if (!$selectedNode) return selectedMode; // default if none
-    
-    if (nodeSpecificModes.has($selectedNode.id)) {
-      return nodeSpecificModes.get($selectedNode.id);
+  // determine submode to display in preview
+  function getEffectivePreviewMode() {
+    if ($selectedNode) {
+      const nodeMode = getCurrentNodeMode();
+      if (nodeMode) return nodeMode;
     }
-    
+
+    if (selectedMode) return selectedMode;
+
+    // fallback to first available mode in manifest
+    const availableModes = componentManifest?.modes?.[currentInteractionMode] || [];
+    return availableModes[0] || null;
+  }
+
+  // determine current submode for selected node
+  function getCurrentNodeMode() {
+    if (!$selectedNode) return selectedMode;
+
+    if (nodeSpecificModes.has($selectedNode.id)) {
+      const stored = nodeSpecificModes.get($selectedNode.id);
+      return stored;
+    }
+
     if ($selectedNode.data?.modeName) {
-      const manifestModes = componentManifest?.modes?.[currentInteractionMode] || [];
+      const interactionMode = $selectedNode.data?.interactionMode || currentInteractionMode;
+      const manifestModes = componentManifest?.modes?.[interactionMode as string] || [];
       const nodeMode = manifestModes.find((mode: any) => mode.mode_name === $selectedNode.data.modeName);
+      
       if (nodeMode) {
         nodeSpecificModes.set($selectedNode.id, nodeMode);
         return nodeMode;
+      } else {
+        // console.warn(` Mode "${$selectedNode.data.modeName}" not found in manifest for ${interactionMode}`);
       }
     }
     
@@ -463,22 +1279,15 @@
   }
 
   function handleModeChange(newMode: any) {
-    console.log('=== component mode change ===');
-    console.log('changing to:', newMode.mode_name);
-    console.log('new mode variables:', newMode.variables?.variable);
-    
     if (!$selectedNode) {
-      console.log('no selected node for mode change');
       return;
     }
 
-    // store current position before update
+    // store current node position before mode change
     const currentPosition = $selectedNode.position;
-    console.log('preserving position:', currentPosition);
+    nodeSpecificModes.set($selectedNode.id, newMode); // store mode for this node
 
-    nodeSpecificModes.set($selectedNode.id, newMode);
-    console.log('storing mode for node:', $selectedNode.id, newMode.mode_name);
-
+    // extract new variables and child items
     const newVariables = newMode.variables?.variable || [];
     const newChildItems = newVariables.map((variable: any) => ({
       id: variable.target_variable,
@@ -488,18 +1297,16 @@
       type: variable.type
     }));
 
-    // dynamic sizing for mode change
+    // dynamic component sizing on mode change
     const rows = newVariables.length;
     const newWidth = Math.max(320, childWidth + 80);
     const newHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
-    
-    console.log('updating node with new childItems:', newChildItems);
 
     nodes.update(allNodes => allNodes.map(node => {
       if (node.id === $selectedNode.id) {
         return {
           ...node,
-          position: currentPosition, // explicitly preserve position
+          position: currentPosition, // preserve position
           data: {
             ...node.data,
             modeName: newMode.mode_name,
@@ -513,28 +1320,7 @@
       return node;
     }));
 
-    // update dynamic library nodes if necessary
-    if ($selectedNode.id.startsWith('library-component-')) {
-      libraryNodes.update(libNodes => libNodes.map(node => {
-        if (node.id === $selectedNode.id) {
-          return {
-            ...node,
-            position: currentPosition, // also preserve here
-            data: {
-              ...node.data,
-              modeName: newMode.mode_name,
-              childItems: newChildItems,
-              componentVariables: newVariables,
-              version: nodeVersion + 1
-            },
-            style: `width: ${newWidth}px; height: ${newHeight}px;`
-          };
-        }
-        return node;
-      }));
-    }
-
-    // filter dynamic edges & remove edges belonging to changed handles
+    // filter dynamic edges & remove edges belonging to edited handles
     edges.update(allEdges => allEdges.filter(edge => 
       !edge.sourceHandle?.startsWith($selectedNode.id + '-') &&
       !edge.targetHandle?.startsWith($selectedNode.id + '-')
@@ -543,28 +1329,21 @@
     selectedMode = newMode;
     componentVariables = newMode.variables?.variable || [];
     componentSettings = newMode.settings?.setting || [];
-    
-    console.log('after mode change - componentvariables:', componentVariables);
-    console.log('after mode change - variables length:', componentVariables.length);
-    
-    // if forceNodeUpdate() cant be called recreate all nodes
-    // forceNodeUpdate();
   }
 
-  // calc viewport center for node placement
+  // calculate center position of current viewport in flow coordinates
   function getViewportCenter(): {x: number, y: number} {
+    // get flow container element and its dimensions
     const flowContainer = document.querySelector('.svelte-flow');
     const flowRect = flowContainer?.getBoundingClientRect();
     
     if (!flowRect || !flowContainer) {
-      // console.log('no flow container > fallback');
-      return { x: 400, y: 300 };
+      return { x: 400, y: 300 }; // fallback position
     }
 
-    // get viewport from DOM
+    // get viewport from flow container
     const viewportElement = flowContainer.querySelector('.svelte-flow__viewport');
     if (!viewportElement) {
-      // console.log('no viewport found > fallback');
       return { x: 400, y: 300 };
     }
 
@@ -574,6 +1353,7 @@
     
     let x = 0, y = 0, zoom = 1;
     
+    // extract values from matrix
     if (transform && transform !== 'none') {
       const matrix = transform.match(/matrix\(([^)]+)\)/);
       // extract matrix values from CSS transform string,  EXAMPLE: "matrix(1.5, 0, 0, 1.5, 200, 100)" >> ["1.5", "0", "0", "1.5", "200", "100"]
@@ -589,20 +1369,15 @@
     // calculate center pos in flow coordinates
     const centerX = (-x + flowRect.width / 2) / zoom;
     const centerY = (-y + flowRect.height / 2) / zoom;
-    
-    console.log('calculated center:', { x, y, zoom, centerX, centerY });
-    
-    return { x: centerX - 160, y: centerY - 100 };
+
+    return { x: centerX - 160, y: centerY - 100 }; // return center adjusted for node size
   }
 
+  // add new component node to canvas
   function handleAddComponent(component: any) {
-    // console.log('adding component to flow:', component);
     const centerPos = getViewportCenter();
-    // console.log('center position for new component:', centerPos);
-
     const modeVariables = component.mode?.variables?.variable || [];
     
-    // create dynamic child items for new componentg
     const childItems = modeVariables.map((variable: any) => ({
       id: variable.target_variable,
       label: variable.target_variable,
@@ -611,19 +1386,18 @@
       type: variable.type
     }));
 
-    // dynamic sizing for new component
     const rows = Array.isArray(modeVariables) ? modeVariables.length : 0;
     const newParentWidth = Math.max(320, childWidth + 80);
     const newParentHeight = Math.max(140, rows * childHeight + (rows - 1) * rowGap + 100);
-
-    const newNodeId = `library-component-${Date.now()}`;
+    const newNodeId = `${component.meta.component_name}-${currentInteractionMode}-${component.mode.mode_name}-${Date.now()}`;
+    
     const newNode = {
       id: newNodeId,
       type: 'nodeWithItems',
       data: {
-        label: component.meta.title || component.meta.component_name,
-        componentId: component.meta.component_name,
+        label: `${component.meta.component_name}`,
         componentName: component.meta.component_name,
+        componentId: newNodeId,
         modeName: component.mode?.mode_name || '',
         interactionMode: currentInteractionMode,
         childItems: childItems,
@@ -640,19 +1414,14 @@
       dragging: false,
       draggable: true
     };
-    
-    libraryNodes.update(current => [...current, newNode]);
-    
-    console.log('added new node:', newNode);
+
+    nodes.update(current => [...current, newNode]);
   }
 
-  // find initial direction
+  // find initial edge direction on connection based on component variable settings
   function determineInitialDirection(sourceHandleId: string, targetHandleId: string) {
-    console.log('=== determining initial direction ===');
-    console.log('sourceHandleId:', sourceHandleId);
-    console.log('targetHandleId:', targetHandleId);
-    
-    let componentVariablesToCheck: any[] = [];
+
+    let componentVariablesToCheck: any[] = []; // variables array to check
     let componentHandleId = '';
     
     const allNodes = get(nodes);
@@ -660,6 +1429,7 @@
     // find dynamic component node
     for (const node of allNodes) {
       if (node.type === 'nodeWithItems') {
+        // check if source or target handle belongs to this component
         if (sourceHandleId && sourceHandleId.startsWith(`${node.id}-`) && sourceHandleId.endsWith('-handle')) {
           componentVariablesToCheck = Array.isArray(node.data?.componentVariables) ? node.data.componentVariables : [];
           componentHandleId = sourceHandleId;
@@ -671,82 +1441,74 @@
         }
       }
     }
-    
-    console.log('found component variables:', componentVariablesToCheck);
 
-    // check if component handle and variables are valid & set bools for edge-end arrow markers
+    // check if component handle and variables are valid & set bools for arrow markers
     if (componentHandleId && componentVariablesToCheck.length > 0) {
-      // extract dynamic variable name
-      const handleParts = componentHandleId.split('-');
-      console.log('handle parts:', handleParts);
-      
+
+      const handleParts = componentHandleId.split('-'); // extract dynamic variable name
+
+      // expected format: componentId-variableName-handle
       if (handleParts.length >= 3) {
         const variableName = handleParts[handleParts.length - 2];
-        console.log('extracted variable name (corrected):', variableName);
 
         // find dynamic variable
         const variable = componentVariablesToCheck.find((v: any) => v.target_variable === variableName);
-        console.log('found variable:', variable);
         
         if (variable) {
+          
           // automatic bidirectionality
           if (variable.is_input && variable.is_output) {
-            console.log('setting bidirectional for input/output parameter:', variableName);
             return { leftDirection: true, rightDirection: true };
           }
-          //   input-only
+          // input-only
           if (variable.is_input && !variable.is_output) {
-            console.log('setting right direction for input-only parameter:', variableName);
+            // console.log('setting right direction for input-only parameter:', variableName);
             return { leftDirection: false, rightDirection: true };
           }
           // output-only
           if (!variable.is_input && variable.is_output) {
-            console.log('setting left direction for output-only parameter:', variableName);
+            // console.log('setting left direction for output-only parameter:', variableName);
             return { leftDirection: true, rightDirection: false };
           }
         } else {
-          console.log('variable not found for name:', variableName);
+          // console.log('variable not found for name:', variableName);
         }
       } else {
-        console.log('unexpected handle format, parts length:', handleParts.length);
+        // console.log('unexpected handle format, parts length:', handleParts.length);
       }
     } else {
-      console.log('no component handle found in connection');
+      // console.log('no component handle found in connection');
     }
     
-    console.log('using default direction (right only)');
     return { leftDirection: false, rightDirection: true };
   }
 
   // checks edges for correct directions, if not -> calculate and set again
   function fixExistingEdges() {
     const currentEdges = get(edges);
-    console.log('=== fixing existing edges ===');
-    console.log('current edges before fix:', currentEdges);
     
     if (!Array.isArray(currentEdges)) {
-      console.log('no valid edges array');
+      // console.log('no valid edges array');
       return;
     }
     
     let hasChanges = false;
     
+    // iterate edges and fix missing direction data
     const fixedEdges = currentEdges.map(edge => {
       const hasValidDirections = edge.data && 
         (edge.data.leftDirection === true || edge.data.leftDirection === false) &&
         (edge.data.rightDirection === true || edge.data.rightDirection === false);
       
       if (hasValidDirections) {
-        console.log('edge already has valid direction data:', edge.id, edge.data);
         return edge;
       }
       
-      console.log('fixing edge with missing/invalid direction data:', edge.id, 'current data:', edge.data);
-      
+      // console.log('fixing edge with missing/invalid direction data:', edge.id, 'current data:', edge.data);
       const direction = determineInitialDirection(edge.sourceHandle ?? '', edge.targetHandle ?? '');
+      // console.log('determined direction for edge:', edge.id, direction);
       
-      console.log('determined direction for edge:', edge.id, direction);
-      
+      // reconstruct edge with correct direction data and markers
       const fixedEdge = {
         ...edge,
         data: {
@@ -760,42 +1522,40 @@
         markerEnd: direction.leftDirection ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
         markerStart: direction.rightDirection ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined
       };
-      
-      console.log('fixed edge:', fixedEdge);
+
       hasChanges = true;
       return fixedEdge;
     });
     
     if (hasChanges) {
-      console.log('updating edges with fixed data');
       edges.set(fixedEdges);
-      
       setTimeout(validateConnections, 100);
-    } else {
-      console.log('no edges needed fixing');
     }
   }
 
+  // reactive call to fix edges on variable change
   $: if (Array.isArray(componentVariables) && componentVariables.length > 0) {
     setTimeout(fixExistingEdges, 50);
   }
 
+  // on node/edge click: set sidebar mode, clear selection, open overview
   function handleNodeClick(event: any) {
     const node = event.detail.node;
     selectedNode.set(node);
     selectedEdge.set(null);
     
-    edges.update(eds => eds.map(edge => ({ ...edge, selected: false })));
+    edges.update(eds => eds.map(edge => ({ ...edge, selected: false }))); // reset edge selection
     
     if (node.type === 'nodeWithItems' || node.type === 'group') {
       sidebarMode = 'overview';
     }
   }
 
+  // handle edge click: select edge, clear node selection
   function handleEdgeClick(event: any) {
     const edge = event.detail.edge;
     
-    // block click on inactive edge (might not be necessary)
+    // early return for edges not connected to selected node
     if (isEditingComponent && $selectedNode) {
       const isConnectedToSelected = 
         edge.sourceHandle?.startsWith($selectedNode.id + '-') || 
@@ -806,13 +1566,13 @@
       }
     }
     
-    console.log('edge clicked:', edge);
     selectedEdge.set(edge);
     selectedNode.set(null);
     
     edges.update(eds => eds.map(e => ({ ...e, selected: e.id === edge.id })));
   }
 
+  // reset selection on pane click
   function handlePaneClick() {
     selectedNode.set(null);
     selectedEdge.set(null);
@@ -826,12 +1586,9 @@
     activeTab = 0;
   }
 
-  // check if connection is valid before allowing
+  // check if connection is valid before allowing 
   function isValidConnection(connection: any) {
     if (!connection) return true;
-    
-    // console.log('=== isvalidconnection check ===');
-    // console.log('connection:', connection);
     
     // check input restriction
     if (connection.sourceHandle && connection.sourceHandle.includes('-handle')) {
@@ -873,52 +1630,143 @@
     return true;
   }
 
+  // handles new edge connections between nodes: validates input restrictions, 
+  // sets edge direction, updates leaf visibility, and syncs config with JSONPath mappings
   function onConnect(params: any) {
     if (!params) return;
-    
-    // console.log('=== onconnect called ===');
-    // console.log('connection params:', params);
-    
-    // input restriction validation
+
+    // input restriction validation, only one input per variable
     if (params.sourceHandle && params.sourceHandle.includes('-handle')) {
       const currentEdges = get(edges);
       const currentNodes = get(nodes);
       const initialDirection = determineInitialDirection(params.sourceHandle, params.targetHandle);
       const sourceNode = currentNodes.find(n => params.sourceHandle.startsWith(n.id + '-'));
-      
       const isComponentNode = sourceNode?.type === 'nodeWithItems' || sourceNode?.id?.startsWith('config-component-') || sourceNode?.id?.startsWith('library-component-');
-      // check flow direction for components
+
+      // block duplicate input connections 
       if (isComponentNode && Array.isArray(currentEdges)) {
         const newEdgeWouldHaveInput = initialDirection.rightDirection || (initialDirection.leftDirection && initialDirection.rightDirection);
-        
+
         if (newEdgeWouldHaveInput) {
           const sourceNodeMode = sourceNode?.data?.interactionMode;
+          // check if handle already has input connections
           const existingInputConnections = currentEdges.filter(edge => {
             if (edge.sourceHandle !== params.sourceHandle) return false;
-            
+
             const hasInputFlow = edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
             if (!hasInputFlow) return false;
-            
+
             const edgeSourceNode = currentNodes.find(n => edge.sourceHandle?.startsWith(n.id + '-'));
             const edgeSourceNodeMode = edgeSourceNode?.data?.interactionMode;
-            
+
             return edgeSourceNodeMode === sourceNodeMode;
           });
-          
+
           if (existingInputConnections.length > 0) {
-            //console.log('target already has input connection, blocking new input connection');
             return;
           }
         }
       }
     }
-    
+
+    // determine edge properties (direction arrows, visibility)
     const initialDirection = determineInitialDirection(params.sourceHandle, params.targetHandle);
     const currentNodes = get(nodes);
+    const currentEdges = get(edges);
     const sourceNode = currentNodes.find(n => params.sourceHandle?.startsWith(n.id + '-'));
+    const targetNode = currentNodes.find(n => n.id === params.target);
     const sourceNodeMode = sourceNode?.data?.interactionMode;
+    const componentUiId = sourceNode?.id;
 
-    // create new edge + direction markers
+    // special logic for leaf -> node connections (to set JSONPath & visibility)
+    if (sourceNode?.type === 'nodeWithItems' && targetNode?.type === 'leafNode') {
+      const targetJsonPath = targetNode.data?.path ? `$.${targetNode.data.path}` : '';
+      const isVisible = initialDirection.leftDirection && !initialDirection.rightDirection;
+
+      const existingLeafConnections = currentEdges.filter(edge => {
+        const edgeSource = currentNodes.find(n => n.id === edge.source);
+        const edgeTarget = currentNodes.find(n => n.id === edge.target);
+        
+        const isFromSameComponent = 
+          (edge.source === sourceNode.id || edge.target === sourceNode.id) ||
+          (edge.sourceHandle?.startsWith(sourceNode.id + '-') || edge.targetHandle?.startsWith(sourceNode.id + '-'));
+        
+        if (!isFromSameComponent) return false;
+        
+        const isLeafConnection = edgeTarget?.type === 'leafNode' || edgeSource?.type === 'leafNode';
+        return isLeafConnection;
+      });
+
+      const currentAnchorpoint = sourceNode.data?.anchorpoint;
+      
+      if (targetJsonPath && existingLeafConnections.length === 0) {
+        
+        // update node state with new anchorpoint
+        nodes.update(ns => ns.map(n =>
+          n.id === sourceNode.id ? { ...n, data: {...n.data, anchorpoint: targetJsonPath}} : n
+        ));
+
+        // update selectedNode if selected
+        selectedNode.update(sn => 
+          sn && sn.id === sourceNode.id ? { ...sn, data: { ...sn.data, anchorpoint: targetJsonPath }} : sn
+        );
+
+        // update config directly
+        const cfg = getCurrentConfig();
+        let compIdx = cfg.components.findIndex((c: any) =>
+          c.meta.component_ui_id === sourceNode.id
+        );
+        
+        // update or create component entry
+        if (compIdx >= 0) {
+          // component exists > update
+          cfg.components[compIdx].globalSettings.anchorpoint = targetJsonPath;
+        } else {
+          // component not yet in config > create with buildComponentData
+          const newComponentData = buildComponentData(sourceNode);
+          if (newComponentData) {
+            newComponentData.globalSettings.anchorpoint = targetJsonPath;
+            cfg.components.push(newComponentData);
+            compIdx = cfg.components.length - 1;
+          }
+        }
+        
+        // force config reactivity
+        if (currentInteractionMode === 'edit') {
+          componentConfig_edit = { ...cfg };
+        } else {
+          componentConfig_view = { ...cfg };
+        }
+      }
+
+      // update leaf node state
+      nodes.update(allNodes =>
+        allNodes.map(node => {
+          if (node.id === targetNode.id) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                is_visible: isVisible,
+                edges,
+                nodes,
+                activeInteractionMode: currentInteractionMode,
+                onToggleVisibility: handleToggleLeafVisibility,
+                onSetAnchorpoint: handleSetAnchorpoint
+              }
+            };
+          }
+          return node;
+        })
+      );
+
+      // update component variable visibility
+      if (componentUiId && targetNode.data?.path && typeof targetNode.data.path === 'string') {
+        updateComponentVariableVisibility(componentUiId, targetNode.data.path, isVisible);
+      }
+    }
+
+    // create new edge
     const newEdge = {
       id: `${params.source}-${params.target}`,
       source: params.source,
@@ -929,7 +1777,6 @@
       animated: false,
       style: 'stroke: #007acc; stroke-width: 2px;',
       selected: false,
-
       markerEnd: initialDirection.leftDirection ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
       markerStart: initialDirection.rightDirection ? { type: MarkerType.ArrowClosed, color: '#007acc' } : undefined,
       data: {
@@ -940,15 +1787,68 @@
         sourceMode: sourceNodeMode
       }
     };
-    
-    //console.log('creating new edge with markers and data:', newEdge);
+
     edges.update(all => [...all, newEdge]);
-    
+
+    // update component variable with JSONPath & directions
+    if (sourceNode?.type === 'nodeWithItems' && targetNode?.type === 'leafNode') {
+      const cfg = getCurrentConfig();
+      const compIdx = cfg.components.findIndex((c: any) =>
+        c.meta.component_ui_id === sourceNode.id
+      );
+
+      // update variable entry
+      if (compIdx >= 0) {
+        const varsArr = cfg.components[compIdx].mode?.variables?.variable || [];
+        const parts = (params.sourceHandle || '').split('-');
+        const varName = parts.length >= 3 ? parts[parts.length - 2] : '';
+        const vIdx = varsArr.findIndex((v: any) => v.target_variable === varName);
+        const jsonPath = targetNode.data?.path ? `$.${targetNode.data.path}` : '';
+        
+        // update variable data with new edge info
+        if (vIdx >= 0 && jsonPath) {
+          varsArr[vIdx].JSONPath = jsonPath;
+          varsArr[vIdx].is_input = newEdge.data.rightDirection;
+          varsArr[vIdx].is_output = newEdge.data.leftDirection;
+          if (typeof targetNode.data?.is_visible === 'boolean') {
+            varsArr[vIdx].is_visible = targetNode.data.is_visible;
+          } else if (varsArr[vIdx].is_visible === undefined) {
+            varsArr[vIdx].is_visible = true;
+          }
+        }
+        if (currentInteractionMode === 'edit') {
+          componentConfig_edit = { ...componentConfig_edit };
+        } else {
+          componentConfig_view = { ...componentConfig_view };
+        }
+      }
+    }
+
+    // force update leaf nodes
     setTimeout(() => {
+      nodes.update(allNodes =>
+        allNodes.map(node => {
+          if (node.type === 'leafNode') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                edges,
+                nodes,
+                activeInteractionMode: currentInteractionMode,
+                onToggleVisibility: handleToggleLeafVisibility,
+                onSetAnchorpoint: handleSetAnchorpoint
+              }
+            };
+          }
+          return node;
+        })
+      );
       validateConnections();
-    }, 10);
+    }, 50);
   }
 
+  // validate connections for component variables and update validation status
   function validateConnections() {
     const currentEdges = get(edges);
     const allNodes = get(nodes);
@@ -957,16 +1857,12 @@
     let allItems: { [key: string]: boolean } = {};
     let typeValid = true;
 
-    console.log('=== validating connections ===');
-    console.log('current interaction mode:', currentInteractionMode);
-    console.log('sidebar mode:', sidebarMode);
-
     // validate based on mode and sidebar state
     if ($selectedNode && sidebarMode === 'edit' && $selectedNode.type === 'nodeWithItems') {
       // edit mode: validate only selected component node
       const selectedNodeVariables = Array.isArray($selectedNode.data?.componentVariables) ? $selectedNode.data.componentVariables : [];
-      console.log(`validating selected node ${$selectedNode.id} with ${selectedNodeVariables.length} variables`);
       
+      // early return for no variables
       if (selectedNodeVariables.length === 0) {
         validationStatus.set({
           connected: {
@@ -982,29 +1878,26 @@
       
       totalVariablesCount = selectedNodeVariables.length;
 
+      // check each variable for connections
       selectedNodeVariables.forEach((variable: any) => {
         const handleId = `${$selectedNode.id}-${variable.target_variable}-handle`;
-        
-        console.log(`checking variable ${variable.target_variable} in selected node ${$selectedNode.id} (${variable.is_input ? 'IN' : ''}${variable.is_output ? 'OUT' : ''})`);
-
         const connectedEdges = currentEdges.filter(edge => {
           const isSourceMatch = edge.sourceHandle === handleId;
           const isTargetMatch = edge.targetHandle === handleId;
           return isSourceMatch || isTargetMatch;
         });
-        
-        console.log(`- found ${connectedEdges.length} connected edges for ${variable.target_variable}`);
-        
+
         let hasValidConnection = false;
 
+        // check connection based on variable directionality from config
         if (variable.is_input && variable.is_output) {
           const bidirectionalEdges = connectedEdges.filter(edge => 
             edge.data?.leftDirection === true && edge.data?.rightDirection === true
           );
           
+          // check if handle already has input connections
           if (bidirectionalEdges.length > 0) {
             hasValidConnection = true;
-            console.log(`- ${variable.target_variable} has bidirectional connection`);
           } else {
             const inputConnections = connectedEdges.filter(edge => {
               const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
@@ -1020,10 +1913,10 @@
             
             if (inputConnections.length > 0 && outputConnections.length > 0) {
               hasValidConnection = true;
-              console.log(`- ${variable.target_variable} has separate input (${inputConnections.length}) and output (${outputConnections.length}) connections`);
             }
           }
           
+        // check if input-only variable has valid input connection
         } else if (variable.is_input && !variable.is_output) {
           const inputConnections = connectedEdges.filter(edge => {
             const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
@@ -1033,11 +1926,11 @@
           
           if (inputConnections.length > 0) {
             hasValidConnection = true;
-            console.log(`- ${variable.target_variable} has input connection`);
           } else {
-            console.log(`- ${variable.target_variable} missing input connection`);
+            // console.log(`- ${variable.target_variable} missing input connection`);
           }
-          
+        
+          // check if output-only variable has valid output connection
         } else if (!variable.is_input && variable.is_output) {
           const outputConnections = connectedEdges.filter(edge => {
             const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
@@ -1047,34 +1940,29 @@
           
           if (outputConnections.length > 0) {
             hasValidConnection = true;
-            console.log(`- ${variable.target_variable} has output connection`);
           } else {
-            console.log(`- ${variable.target_variable} missing output connection`);
+            // console.log(`- ${variable.target_variable} missing output connection`);
           }
         }
         
-        allItems[`${$selectedNode.id}-${variable.target_variable}`] = hasValidConnection;
+        allItems[`${$selectedNode.id}-${variable.target_variable}`] = hasValidConnection; // store individual item status
         if (hasValidConnection) {
           totalConnectedCount++;
         }
-        
-        console.log(`- final result for ${variable.target_variable}: ${hasValidConnection}`);
       });
-      
-      console.log(`selected node validation: ${totalConnectedCount}/${totalVariablesCount} connected`);
       
     } else {
       // overview/view mode: validate all component nodes
       allNodes.forEach(node => {
-        if (node.type === 'nodeWithItems') {
+        if (node.type === 'nodeWithItems' && node.data?.interactionMode === currentInteractionMode) {
           const nodeVariables = Array.isArray(node.data?.componentVariables) ? node.data.componentVariables : [];
-          console.log(`validating node ${node.id} with ${nodeVariables.length} variables`);
           
           if (nodeVariables.length === 0) return;
           
           let nodeConnectedCount = 0;
           let nodeVariablesCount = nodeVariables.length;
 
+          // check each variable for connections
           nodeVariables.forEach((variable: any) => {
             const handleId = `${node.id}-${variable.target_variable}-handle`;
             
@@ -1091,6 +1979,7 @@
                 edge.data?.leftDirection === true && edge.data?.rightDirection === true
               );
               
+              // check if handle already has bidirectional connections
               if (bidirectionalEdges.length > 0) {
                 hasValidConnection = true;
               } else {
@@ -1111,6 +2000,7 @@
                 }
               }
               
+              // check if input-only variable has valid input connection
             } else if (variable.is_input && !variable.is_output) {
               const inputConnections = connectedEdges.filter(edge => {
                 const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
@@ -1122,6 +2012,7 @@
                 hasValidConnection = true;
               }
               
+              // check if output-only variable has valid output connection
             } else if (!variable.is_input && variable.is_output) {
               const outputConnections = connectedEdges.filter(edge => {
                 const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
@@ -1146,12 +2037,7 @@
       });
     }
 
-    console.log('validation results:', {
-      total: totalVariablesCount,
-      connected: totalConnectedCount,
-      items: allItems
-    });
-
+    // set validation status store
     validationStatus.set({
       connected: {
         total: totalVariablesCount,
@@ -1163,6 +2049,7 @@
     });
   }
 
+  // trigger validation on edges change
   $: if ($edges) {
     validateConnections();
   }
@@ -1170,8 +2057,8 @@
   const nodeTypes: NodeTypes = {
     nodeWithItems: NodeWithItems as any,
     itemNode: ItemNode as any,
-    sectionNode: SectionNode as any,  // for section headers
-    leafNode: LeafNode as any,        // for metadata leaves with handles
+    sectionNode: SectionNode as any,
+    leafNode: LeafNode as any,
     group: NodeWithItems as any
   };
 
@@ -1497,14 +2384,18 @@
       {#if sidebarMode === 'empty'}
         <ComponentLibrary 
           {currentInteractionMode}
-          {componentConfig}
+          componentConfig={getCurrentConfig()}
           {componentManifest}
           onAddComponent={handleAddComponent}
+          onSaveMappings={handleSaveMappingsOnly}
+          onSave={handleSaveEdit}
         />
       {:else if sidebarMode === 'overview'}
         <ComponentOverview 
           selectedNode={$selectedNode} 
           onEdit={handleEdit}
+          onSave={handleSaveEdit}
+          onDelete={handleDeleteComponent}
         />
       {:else if sidebarMode === 'edit'}
         <div class="tabs">
@@ -1530,20 +2421,23 @@
             />
           {:else if activeTab === 1}
             <ConfigTab 
-              {componentConfig}
+              componentConfig={getCurrentConfig()}
               {validationStatus}
               {edges}
-              selectedMode={selectedMode}
+              {nodes}
+              selectedMode={currentNodeMode}
               {componentManifest}
               selectedNode={$selectedNode}
+              onSetAnchorpoint={handleSetAnchorpoint}
+              onConfigChange={handleConfigChange}
             />
           {:else if activeTab === 2}
             <PreviewTab 
               {componentManifest}
               selectedNode={$selectedNode}
-              selectedMode={selectedMode}
+              selectedMode={effectivePreviewMode}
               {currentInteractionMode}
-              {componentConfig}
+              componentConfig={getCurrentConfig()}
             />
           {/if}
         </div>
@@ -1571,6 +2465,35 @@
       <div class="modal-buttons">
         <button class="cancel-button" on:click={cancelModeChange}>Cancel</button>
         <button class="confirm-button" on:click={confirmModeChange}>Yes, Switch Mode</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- cancel confirmation dialog -->
+{#if showCancelWarning}
+  <div class="modal-overlay">
+    <div class="modal">
+      <h3>Cancel Changes</h3>
+      <p>Are you sure? All unsaved changes will be lost.</p>
+      <div class="modal-buttons">
+        <button class="cancel-button" on:click={rejectCancel}>No, Keep Editing</button>
+        <button class="confirm-button" on:click={confirmCancel}>Yes, Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- delete confirmation dialog -->
+{#if showDeleteWarning}
+  <div class="modal-overlay">
+    <div class="modal">
+      <h3>Delete Component</h3>
+      <p>Are you sure you want to delete "{nodeToDelete?.data.componentName}"?</p>
+      <p>This can remove all connections and cannot be undone.</p>
+      <div class="modal-buttons">
+        <button class="cancel-button" on:click={rejectDelete}>Cancel</button>
+        <button class="confirm-button" on:click={confirmDelete}>Yes, Delete</button>
       </div>
     </div>
   </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { writable } from 'svelte/store';
+  import { writable, get } from 'svelte/store';
 
   export let componentConfig: any;
   export let validationStatus: any;
@@ -7,12 +7,168 @@
   export let selectedMode: any;
   export let componentManifest: any;
   export let selectedNode: any;
+  export let nodes: any;
+  export let onSetAnchorpoint: ((componentId: string, jsonPath: string) => void) | undefined = undefined;
+  export let onConfigChange: ((config: any) => void) | undefined = undefined;
 
   let hasLoop = false;
   let loopDetails: Array<{path: string[]}> = [];
   let selectedParameter = '';
-  let regexInput = '';
+  let regexInputValue = '';
+  let regexOutputValue = '';
+  
   let showResetConfirm = false;
+
+  $: connectedLeafNodes = getConnectedLeafNodes(get(edges), get(nodes), selectedNode?.id || '');
+  $: selectedComponentNode = selectedNode ? (Array.isArray(get(nodes)) ? (get(nodes) as any[]).find((n: any) => n.id === selectedNode.id) : null) : null;
+  $: currentAnchorpoint = (selectedComponentNode?.data?.anchorpoint ?? selectedNode?.data?.anchorpoint ?? '') || '';
+
+  $: currentComponent = findCurrentComponent();
+
+  $: manifestMode = getManifestMode();
+  $: manifestSettings = manifestMode?.settings?.setting || [];
+  $: manifestGlobalSettings = componentManifest?.globalSettings?.globalsetting || [];
+
+  $: configSettings = currentComponent?.mode?.settings?.setting || [];
+  $: configGlobalSettings = currentComponent?.globalSettings?.globalsetting || [];
+
+  $: displaySettings = mergeSettingsWithConfig(manifestSettings, configSettings);
+  $: displayGlobalSettings = mergeSettingsWithConfig(manifestGlobalSettings, configGlobalSettings);
+
+  // get all available variables for the selected nodes component submode
+  $: availableVariables = (selectedNode?.data?.componentVariables || []).map((v: any) => {
+    const manifestVar = manifestMode?.variables?.variable?.find((mv: any) => 
+      mv.target_variable === v.target_variable
+    );
+    
+    return {
+      ...v,
+      allowregex_input: manifestVar?.allowregex_input || false,
+      allowregex_output: manifestVar?.allowregex_output || false
+    };
+  });
+
+  // filter variables that support regex input or output
+  $: regexCapableVariables = availableVariables.filter((v: any) => 
+    v.allowregex_input || v.allowregex_output
+  );
+
+  // currently selected variable with details
+  $: selectedVariableDetails = selectedParameter ? availableVariables.find((v: any) => v.target_variable === selectedParameter) : null;
+
+  // load input/ output regex reactively when variable changes
+  $: if (selectedParameter && currentComponent) {
+    loadRegexForSelectedVariable();
+  }
+
+  function loadRegexForSelectedVariable() {
+    if (!currentComponent || !selectedParameter) {
+      regexInputValue = '';
+      regexOutputValue = '';
+      return;
+    }
+
+    // find variable in current component config
+    const variables = currentComponent.mode?.variables?.variable || [];
+    const variable = variables.find((v: any) => v.target_variable === selectedParameter);
+
+    if (variable) {
+      regexInputValue = variable.input_regex || '';
+      regexOutputValue = variable.output_regex || '';
+    } else {
+      regexInputValue = '';
+      regexOutputValue = '';
+    }
+  }
+
+  function findCurrentComponent() {
+    if (!selectedNode || !componentConfig?.components) return null;
+    const nodeId = selectedNode.id;
+    
+    // find component by ui_id
+    return componentConfig.components.find((c: any) => 
+      c.meta.component_ui_id === nodeId
+    ) || null;
+  }
+
+  // filters edges to find connected leaf nodes for a given component id
+  export function getConnectedLeafNodes($edges: any[], $nodes: any[], componentId: string) {
+    const result: Array<{ id: string; label: string; path: string; jsonPath: string }> = [];
+    if (!$edges || !$nodes || !componentId) return result;
+
+    // iterate through edges to find those connected to the component
+    $edges.forEach((edge: any) => {
+      const isConnected = edge.source === componentId || edge.target === componentId;
+      if (!isConnected) return;
+
+      const leafId =
+        edge.target?.startsWith('schema-leaf-') ? edge.target :
+        edge.source?.startsWith('schema-leaf-') ? edge.source : null;
+      if (!leafId) return;
+
+      // find the leaf node object
+      const leaf = $nodes.find((n: any) => n.id === leafId && n.type === 'leafNode');
+      if (!leaf?.data?.path) return;
+
+      // build jsonpath format and add to result
+      const jsonPath = `$.${leaf.data.path}`;
+      if (!result.find(r => r.jsonPath === jsonPath)) {
+        result.push({
+          id: leaf.id,
+          label: leaf.data.label || leaf.data.path,
+          path: leaf.data.path,
+          jsonPath
+        });
+      }
+    });
+
+    return result;
+  }
+
+  // set new anchorpoint for the selected node
+  export function handleAnchorpointChange(e: Event, selectedNode: any, onSetAnchorpoint?: (id: string, jp: string) => void) {
+    const target = e.target as HTMLSelectElement;
+    const newJsonPath = target?.value || '';
+    if (!selectedNode?.id || !onSetAnchorpoint) return;
+    onSetAnchorpoint(selectedNode.id, newJsonPath);
+  }
+
+  function getManifestMode() {
+    if (!selectedMode) {
+      // console.warn('No selectedMode available');
+      return null;
+    }
+    
+    const interactionMode = selectedNode?.data?.interactionMode || 'edit';
+    const manifestModes = componentManifest?.modes?.[interactionMode] || [];
+    
+    const found = manifestModes.find((mode: any) => 
+      mode.mode_name === selectedMode.mode_name
+    );
+    
+    return found || selectedMode;
+  }
+
+  // merge manifest settings with config settings for correct setting values
+  function mergeSettingsWithConfig(manifestSettings: any[], configSettings: any[]) {
+
+    return manifestSettings.map((manifestSetting: any) => {
+      const configSetting = configSettings.find(
+        (cs: any) => cs.target_variable === manifestSetting.target_variable
+      );
+      
+      const merged = {
+        name: manifestSetting.name,
+        target_variable: manifestSetting.target_variable,
+        type: manifestSetting.type,
+        description: manifestSetting.description,
+        default_value: manifestSetting.default_value,
+        value: configSetting?.value ?? manifestSetting.default_value?.value ?? ''
+      };
+
+      return merged;
+    });
+  }
 
   // store initial state for reset functionality
   let initialConfigState: any = null;
@@ -22,13 +178,9 @@
     initialConfigState = JSON.parse(JSON.stringify(componentConfig));
   }
 
-  $: allVariables = selectedMode?.variables?.variable || [];
+  $: allVariables = selectedNode?.data?.componentVariables || [];
   $: allSettings = selectedMode?.settings?.setting || [];
   $: globalSettings = componentManifest?.globalSettings?.globalsetting || [];
-
-  // get current config settings
-  $: configSettings = componentConfig?.components?.[0]?.mode?.settings?.setting || [];
-  $: configGlobalSettings = componentConfig?.components?.[0]?.globalSettings?.globalsetting || [];
 
   // create default values lookup from manifest
   $: settingDefaults = createSettingDefaults();
@@ -69,26 +221,279 @@
     }
   }
 
-  $: if ($edges) {
-    console.log('edges changed');
-  }
-
+  // apply regex validation to selected variable
   function applyValidation() {
-    if (!selectedParameter || !regexInput) return;
-    selectedParameter = '';
-    regexInput = '';
+    if (!selectedParameter) {
+      alert('Please select a variable first!');
+      return;
+    }
+
+    if (!selectedVariableDetails) {
+      alert('Variable details not found!');
+      return;
+    }
+
+    const hasInputRegex = selectedVariableDetails.allowregex_input && regexInputValue.trim();
+    const hasOutputRegex = selectedVariableDetails.allowregex_output && regexOutputValue.trim();
+
+    if (!hasInputRegex && !hasOutputRegex) {
+      alert('Please enter at least one regex pattern!');
+      return;
+    }
+
+    if (!currentComponent) {
+      ensureComponentInConfig();
+    }
+
+    const comp = findCurrentComponent();
+    if (!comp) {
+      return;
+    }
+
+    // ensure variables array exists
+    if (!comp.mode.variables) {
+      comp.mode.variables = { variable: [] };
+    }
+
+    const variablesArray = comp.mode.variables.variable;
+    let variableIndex = variablesArray.findIndex((v: any) => 
+      v.target_variable === selectedParameter
+    );
+
+    // ensure variable exists, create from manifest if not
+    if (variableIndex < 0) { // -1 findIndex means not found
+
+      const manifestVariable = manifestMode?.variables?.variable?.find((mv: any) => 
+        mv.target_variable === selectedParameter
+      );
+      
+      if (manifestVariable) {
+        // create new variable with manifest data
+        const newVariable: any = {
+          target_variable: selectedParameter,
+          is_input: manifestVariable.is_input || false,
+          is_output: manifestVariable.is_output || false,
+          type: manifestVariable.type || 'string',
+          JSONPath: '',
+          is_visible: true
+        };
+        
+        variablesArray.push(newVariable);
+        variableIndex = variablesArray.length - 1;
+      } else {
+        // alert(`Error: Variable ${selectedParameter} not found in manifest!`);
+        return;
+      }
+    }
+
+    // set regex patterns
+    if (hasInputRegex) {
+      variablesArray[variableIndex].input_regex = regexInputValue.trim();
+    }
+    if (hasOutputRegex) {
+      variablesArray[variableIndex].output_regex = regexOutputValue.trim();
+    }
+
+    componentConfig = { ...componentConfig };
+    if (onConfigChange) {
+      onConfigChange(componentConfig);
+    }
   }
 
+  // handle changes to boolean settings
   function handleBooleanChange(setting, event) {
-    setting.value = event.target.checked;
+    const newValue = event.target.checked;
+    setting.value = newValue;
+    
+    if (!currentComponent && selectedNode) {
+      ensureComponentInConfig();
+    }
+    
+    const comp = findCurrentComponent();
+    if (comp) {
+      if (!comp.mode.settings) {
+        comp.mode.settings = { setting: [] };
+      }
+      
+      const settingsArray = comp.mode.settings.setting;
+      const settingIndex = settingsArray.findIndex(s => s.target_variable === setting.target_variable);
+      
+      // update or add setting 
+      if (settingIndex >= 0) {
+        settingsArray[settingIndex].value = String(newValue);
+      } else {
+        settingsArray.push({
+          target_variable: setting.target_variable,
+          value: String(newValue)
+        });
+      }
 
-    componentConfig = componentConfig;
+      componentConfig = { ...componentConfig };
+      if (onConfigChange) {
+        onConfigChange(componentConfig);
+      }
+    }
   }
 
+  // handle changes to input string settings
   function handleInputChange(setting, event) {
-    setting.value = event.target.value;
+    const newValue = event.target.value;
+    setting.value = newValue;
+    
+    if (!currentComponent && selectedNode) {
+      ensureComponentInConfig();
+    }
+    
+    const comp = findCurrentComponent();
+    if (comp) {
+      if (!comp.mode.settings) {
+        comp.mode.settings = { setting: [] };
+      }
+      
+      const settingsArray = comp.mode.settings.setting;
+      const settingIndex = settingsArray.findIndex(s => s.target_variable === setting.target_variable);
+      
+      // update or add setting
+      if (settingIndex >= 0) {
+        settingsArray[settingIndex].value = newValue;
+      } else {
+        settingsArray.push({
+          target_variable: setting.target_variable,
+          value: newValue
+        });
+      }
+      
+      componentConfig = { ...componentConfig };
+      if (onConfigChange) {
+        onConfigChange(componentConfig);
+      }
+    }
+  }
 
-    componentConfig = componentConfig;
+  // handle changes to global boolean settings
+  function handleGlobalBooleanChange(setting, event) {
+    const newValue = event.target.checked;
+    setting.value = newValue;
+    
+    if (!currentComponent && selectedNode) {
+      ensureComponentInConfig();
+    }
+    
+    const comp = findCurrentComponent();
+    if (comp) {
+      if (!comp.globalSettings.globalsetting) {
+        comp.globalSettings.globalsetting = [];
+      }
+      
+      const globalSettingsArray = comp.globalSettings.globalsetting;
+      const settingIndex = globalSettingsArray.findIndex(s => s.target_variable === setting.target_variable);
+      
+      if (settingIndex >= 0) {
+        globalSettingsArray[settingIndex].value = String(newValue);
+      } else {
+        globalSettingsArray.push({
+          target_variable: setting.target_variable,
+          value: String(newValue)
+        });
+      }
+      
+      componentConfig = { ...componentConfig };
+      if (onConfigChange) {
+        onConfigChange(componentConfig);
+      }
+    }
+  }
+
+  // handle changes to global input string settings
+  function handleGlobalInputChange(setting, event) {
+    const newValue = event.target.value;
+    setting.value = newValue;
+    
+    if (!currentComponent && selectedNode) {
+      ensureComponentInConfig();
+    }
+    
+    const comp = findCurrentComponent();
+    if (comp) {
+      if (!comp.globalSettings.globalsetting) {
+        comp.globalSettings.globalsetting = [];
+      }
+      
+      const globalSettingsArray = comp.globalSettings.globalsetting;
+      const settingIndex = globalSettingsArray.findIndex(s => s.target_variable === setting.target_variable);
+      
+      if (settingIndex >= 0) {
+        globalSettingsArray[settingIndex].value = newValue;
+      } else {
+        globalSettingsArray.push({
+          target_variable: setting.target_variable,
+          value: newValue
+        });
+      }
+      
+      componentConfig = { ...componentConfig };
+      if (onConfigChange) {
+        onConfigChange(componentConfig);
+      }
+    }
+  }
+
+  // check and add component to config if not present via component id
+  function ensureComponentInConfig() {
+    if (!selectedNode || !componentManifest) return;
+    
+    const nodeId = selectedNode.id;
+    const modeName = selectedNode.data?.modeName;
+    const interactionMode = selectedNode.data?.interactionMode || 'edit';
+    
+    const exists = componentConfig.components.find((c: any) => 
+      c.meta.component_ui_id === nodeId
+    );
+    
+    if (exists) {
+      return;
+    }
+    
+    const manifestModes = componentManifest?.modes?.[interactionMode] || [];
+    const manifestMode = manifestModes.find((m: any) => m.mode_name === modeName);
+    
+    if (!manifestMode) {
+      return;
+    }
+    
+    const newComponent = {
+      meta: {
+        component_name: componentManifest.meta.component_name,
+        component_ui_id: nodeId
+      },
+      globalSettings: {
+        interaction_mode: interactionMode,
+        anchorpoint: selectedNode.data?.anchorpoint || '',
+        globalsetting: (componentManifest?.globalSettings?.globalsetting || []).map((gs: any) => ({
+          target_variable: gs.target_variable,
+          value: gs.default_value?.value || ''
+        }))
+      },
+      mode: {
+        mode_name: modeName,
+        settings: {
+          setting: (manifestMode.settings?.setting || []).map((s: any) => ({
+            target_variable: s.target_variable,
+            value: s.default_value?.value || ''
+          }))
+        },
+        variables: {
+          variable: []
+        }
+      }
+    };
+    
+    componentConfig.components.push(newComponent);
+    componentConfig = { ...componentConfig };
+
+    if (onConfigChange) {
+      onConfigChange(componentConfig);
+    }
   }
 
   function resetToDefaults() {
@@ -96,30 +501,48 @@
   }
 
   function confirmReset() {
-    if (initialConfigState) {
-      // reset by overwriting current config with initial state
-      componentConfig.components = JSON.parse(JSON.stringify(initialConfigState.components));
-      
-      // force reactivity update
-      componentConfig = componentConfig;
-      
-      // clear validation form fields
-      selectedParameter = '';
-      regexInput = '';
+    if (!currentComponent || !manifestMode) {
+      showResetConfirm = false;
+      return;
     }
+    
+    //reset mode settings to manifest defaults
+    const manifestModeSettings = manifestMode?.settings?.setting || [];
+    currentComponent.mode.settings.setting = manifestModeSettings.map((ms: any) => ({
+      target_variable: ms.target_variable,
+      value: ms.default_value?.value ?? ''
+    }));
+    
+    // reset global settings to manifest defaults
+    const manifestGlobalSettings = componentManifest?.globalSettings?.globalsetting || [];
+    currentComponent.globalSettings.globalsetting = manifestGlobalSettings.map((mgs: any) => ({
+      target_variable: mgs.target_variable,
+      value: mgs.default_value?.value ?? ''
+    }));
+    
+    componentConfig = { ...componentConfig };
+    
+    // clear regex form fields
+    selectedParameter = '';
+    regexInputValue = '';
+    regexOutputValue = '';
+    
     showResetConfirm = false;
+    
+    alert('Settings reset to default values!');
   }
 
   function cancelReset() {
     showResetConfirm = false;
   }
 
-  // get setting type from manifest
+  // get setting type from manifest (NOT USED)
   function getSettingType(targetVariable) {
     const manifestSetting = selectedMode?.settings?.setting?.find(s => s.target_variable === targetVariable);
     return manifestSetting?.type || 'string';
   }
 
+  // setting default from manifest (NOT USED)
   function getSettingDefaultValue(targetVariable) {
     const manifestSetting = selectedMode?.settings?.setting?.find(s => s.target_variable === targetVariable);
     if (manifestSetting?.default_value) {
@@ -131,7 +554,7 @@
     return manifestSetting?.type === 'boolean' ? false : '';
   }
 
-  // get validation status for elected node
+  // get validation status for selected node
   $: nodeValidationStatus = getNodeValidationStatus();
 
   function getNodeValidationStatus() {
@@ -140,11 +563,16 @@
     }
 
     const nodeId = selectedNode.id;
-    const nodeVariables = selectedNode.data?.componentVariables || [];
+    const nodeVariables = Array.isArray(selectedNode.data?.componentVariables) ? selectedNode.data.componentVariables : [];
+    
+    if (nodeVariables.length === 0) {
+      return { connected: 0, total: 0, items: {} };
+    }
     
     let connectedCount = 0;
     let nodeItems = {};
     
+    // check validation status for each variable
     nodeVariables.forEach((variable: any) => {
       const itemKey = `${nodeId}-${variable.target_variable}`;
       const isConnected = $validationStatus.connected.items[itemKey] || false;
@@ -160,6 +588,7 @@
       items: nodeItems
     };
   }
+
   // check edges for loops and dependencies
   function checkForLoops() {
     if (!selectedNode || !$edges) {
@@ -267,11 +696,13 @@
       const handle = componentHandle.replace(nodeId + '-', '').replace('-handle', '');
       const schema = schemaNode.replace('schema-leaf-', '').replace('schema-', '').replace('param-', '');
       
+      // start path with component handle and schema node
       const startPath = [handle, schema];
       const visited = new Set([outEdge.id]);
       
       const allPaths = findAllPaths(outEdge, startPath, visited);
       
+      // analyze found paths for loops
       allPaths.forEach(path => {
         if (path.length >= 3) {
           const sortedPath = [...path].sort();
@@ -288,6 +719,7 @@
     // map containing counts of outputs
     const schemaOutputCounts = new Map<string, string[]>();
     
+    // check connection to schema nodes for each edge
     $edges.forEach(edge => {
       const targetIsSchema = edge.target?.startsWith('schema-') || edge.target?.startsWith('param-');
       const sourceIsSchema = edge.source?.startsWith('schema-') || edge.source?.startsWith('param-');
@@ -297,6 +729,7 @@
           const schemaNode = edge.target;
           let sourceHandle = '';
           
+          // extract variable name from source (component id as fallback)
           if (edge.sourceHandle?.startsWith(nodeId + '-')) {
             sourceHandle = edge.sourceHandle.replace(nodeId + '-', '').replace('-handle', '');
           } else {
@@ -304,6 +737,7 @@
             sourceHandle = sourceNode.replace('config-component-', 'Comp').replace('library-component-', 'Comp');
           }
           
+          // add source handle to schema output counts
           if (!schemaOutputCounts.has(schemaNode)) {
             schemaOutputCounts.set(schemaNode, []);
           }
@@ -312,6 +746,7 @@
           const schemaNode = edge.source;
           let targetHandle = '';
           
+          // extract variable name from target (component id as fallback)
           if (edge.targetHandle?.startsWith(nodeId + '-')) {
             targetHandle = edge.targetHandle.replace(nodeId + '-', '').replace('-handle', '');
           } else {
@@ -319,6 +754,7 @@
             targetHandle = targetNode.replace('config-component-', 'Comp').replace('library-component-', 'Comp');
           }
           
+          // add target handle to schema output counts
           if (!schemaOutputCounts.has(schemaNode)) {
             schemaOutputCounts.set(schemaNode, []);
           }
@@ -357,6 +793,33 @@
 <div class="config-tab">
   <h4>Configuration</h4>
 
+  <!-- anchorpoint selection -->
+  {#if connectedLeafNodes.length > 0}
+    <div class="section">
+      <div class="anchorpoint-selector">
+        <label for="anchorpoint-select">
+          Component Placement:
+        </label>
+        <select 
+          id="anchorpoint-select" 
+          value={currentAnchorpoint}
+          on:change={(e) => handleAnchorpointChange(e, selectedNode, onSetAnchorpoint)}
+        >
+          <option value="">-- Select Anchorpoint --</option>
+          {#each connectedLeafNodes as leaf}
+            <option value={leaf.jsonPath}>
+              {leaf.label} ({leaf.path})
+            </option>
+          {/each}
+        </select>
+        <div class="anchorpoint-info">
+          The anchorpoint determines where the component will be rendered in the final form.
+          
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- validation summary -->
   <div class="section">
     <h5>Validation Summary</h5>
@@ -377,17 +840,52 @@
     </button>
   </div>
 
-  <!-- settings list -->
-  {#if configSettings.length > 0}
+  <!-- global settings -->
+  {#if displayGlobalSettings.length > 0}
     <div class="section">
-      <h5>Settings</h5>
+      <h5>Global Settings</h5>
       <div class="settings-list">
-        {#each configSettings as setting}
-          {@const settingType = getSettingType(setting.target_variable)}
-          {@const defaultValue = getSettingDefaultValue(setting.target_variable)}
-          
-          <div class="setting-item" class:boolean={settingType === 'boolean'}>
-            {#if settingType === 'boolean'}
+        {#each displayGlobalSettings as setting}
+          <div class="setting-item" class:boolean={setting.type === 'boolean'}>
+            {#if setting.type === 'boolean'}
+              <input 
+                type="checkbox" 
+                id={`global-${setting.target_variable}`}
+                checked={setting.value === true || setting.value === 'true'}
+                on:change={(e) => handleGlobalBooleanChange(setting, e)}
+              />
+              <label for={`global-${setting.target_variable}`} class="setting-name">
+                {setting.name || setting.target_variable}
+              </label>
+              <div class="default-info">
+                Default: {setting.default_value?.value ?? 'false'}
+              </div>
+            {:else}
+              <label class="setting-name">{setting.name || setting.target_variable}:</label>
+              <input 
+                type="text" 
+                value={setting.value || ''} 
+                on:input={(e) => handleGlobalInputChange(setting, e)}
+                placeholder={`Default: ${setting.default_value?.value || 'No default'}`}
+              />
+              <div class="default-info">
+                Default: {setting.default_value?.value || 'No default'}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- settings -->
+  {#if displaySettings.length > 0}
+    <div class="section">
+      <h5>Settings {manifestMode ? `(${manifestMode.mode_name})` : ''}</h5>
+      <div class="settings-list">
+        {#each displaySettings as setting}
+          <div class="setting-item" class:boolean={setting.type === 'boolean'}>
+            {#if setting.type === 'boolean'}
               <input 
                 type="checkbox" 
                 id={`setting-${setting.target_variable}`}
@@ -397,21 +895,30 @@
               <label for={`setting-${setting.target_variable}`} class="setting-name">
                 {setting.name || setting.target_variable}
               </label>
-              <div class="default-info">Default: {defaultValue}</div>
+              <div class="default-info">
+                Default: {setting.default_value?.value ?? 'false'}
+              </div>
             {:else}
               <label class="setting-name">{setting.name || setting.target_variable}:</label>
               <input 
                 type="text" 
                 value={setting.value || ''} 
                 on:input={(e) => handleInputChange(setting, e)}
-                placeholder={`Default: ${defaultValue || 'No default'}`}
+                placeholder={`Default: ${setting.default_value?.value || 'No default'}`}
               />
               <div class="default-info">
-                Default: {defaultValue || 'No default'}
+                Default: {setting.default_value?.value || 'No default'}
               </div>
             {/if}
           </div>
         {/each}
+      </div>
+    </div>
+  {:else if manifestMode}
+    <div class="section">
+      <h5>Settings {manifestMode ? `(${manifestMode.mode_name})` : ''}</h5>
+      <div class="no-variables">
+        No settings defined for this mode.
       </div>
     </div>
   {/if}
@@ -420,7 +927,7 @@
   <div class="section">
     <h5>Variables Validation</h5>
     <div class="parameters-list">
-      {#each allVariables as variable}
+      {#each (selectedNode?.data?.componentVariables || []) as variable}
         {@const isConnected = nodeValidationStatus.items[variable.target_variable] || false}
         <div class="parameter-item" class:connected={isConnected} class:type-error={!$validationStatus.typeValid}>
           <div class="parameter-info">
@@ -439,16 +946,11 @@
             {#if !$validationStatus.typeValid}
               <div class="type-error">Type mismatch!</div>
             {/if}
-            {#if variable.validation?.regex}
-              <div class="validation-info">
-                Regex: <code>{variable.validation.regex}</code>
-              </div>
-            {/if}
           </div>
         </div>
       {/each}
       
-      {#if allVariables.length === 0}
+      {#if (selectedNode?.data?.componentVariables || []).length === 0}
         <div class="no-variables">
           No variables defined for this mode.
         </div>
@@ -493,38 +995,107 @@
 
   <!-- regex -->
   <div class="section">
-    <h5>Regex</h5>
-    <div class="validation-form">
-      <div class="form-group">
-        <label for="parameter-select">Variable:</label>
-        <select id="parameter-select" bind:value={selectedParameter}>
-          <option value="">Select Variable</option>
-          {#each allVariables as variable}
-            <option value={variable.target_variable}>{variable.target_variable}</option>
-          {/each}
-        </select>
+    <h5>Regex Validation</h5>
+    
+    {#if regexCapableVariables.length === 0}
+      <div class="no-variables">
+        No variables with regex support available.
       </div>
-      <div class="form-group">
-        <label for="regex-input">Regex Pattern:</label>
-        <input 
-          id="regex-input" 
-          type="text" 
-          bind:value={regexInput} 
-          placeholder="Enter regex pattern"
-        />
+    {:else}
+      <div class="validation-form">
+        <!-- variable selection -->
+        <div class="form-group">
+          <label for="parameter-select">
+            Variable:
+          </label>
+          <select id="parameter-select" bind:value={selectedParameter}>
+            <option value="">Select Variable</option>
+            {#each regexCapableVariables as variable}
+              <option value={variable.target_variable}>
+                {variable.target_variable}
+                ({variable.allowregex_input && variable.allowregex_output ? 'IN+OUT' : 
+                  variable.allowregex_input ? 'IN' : 'OUT'})
+              </option>
+            {/each}
+          </select>
+        </div>
+
+        {#if selectedParameter && selectedVariableDetails}
+          <!-- input regex -->
+          {#if selectedVariableDetails.allowregex_input}
+            <div class="form-group">
+              
+              <input 
+                id="regex-input" 
+                type="text" 
+                bind:value={regexInputValue} 
+                placeholder="Enter input regex pattern (e.g., ^[A-Z]{3}-\d{4}$)"
+                class="regex-input"
+              />
+              
+            </div>
+          {/if}
+
+          <!-- output regex -->
+          {#if selectedVariableDetails.allowregex_output}
+            <div class="form-group">
+              
+              <input 
+                id="regex-output" 
+                type="text" 
+                bind:value={regexOutputValue} 
+                placeholder="Enter output regex pattern (e.g., ^[a-z0-9-]+$)"
+                class="regex-input"
+              />
+              
+            </div>
+          {/if}
+
+          <!-- apply button -->
+          <button 
+            class="apply-button" 
+            on:click={applyValidation}
+            disabled={
+              !selectedParameter || 
+              (!regexInputValue.trim() && !regexOutputValue.trim()) ||
+              (!selectedVariableDetails.allowregex_input && !selectedVariableDetails.allowregex_output)
+            }
+          >
+            Apply Regex Validation
+          </button>
+
+          <!-- current Regex Info -->
+          {#if currentComponent}
+            {@const currentVar = currentComponent.mode?.variables?.variable?.find(v => v.target_variable === selectedParameter)}
+            {#if currentVar && (currentVar.input_regex || currentVar.output_regex)}
+              <div class="current-regex-info">
+                <strong>Currently Applied:</strong>
+                {#if currentVar.input_regex}
+                  <div class="regex-display input">
+                    
+                    Input: <code>{currentVar.input_regex}</code>
+                  </div>
+                {/if}
+                {#if currentVar.output_regex}
+                  <div class="regex-display output">
+                    
+                    Output: <code>{currentVar.output_regex}</code>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          {/if}
+        {:else if selectedParameter}
+          <div class="no-regex-support">
+            Selected variable does not support regex validation
+          </div>
+        {/if}
       </div>
-      <button 
-        class="apply-button" 
-        on:click={applyValidation}
-        disabled={!selectedParameter || !regexInput}
-      >
-        Apply Validation
-      </button>
-    </div>
+    {/if}
   </div>
 </div>
 
-<!-- reset confirmation modal -->
+<!-- reset confirmation -->
 {#if showResetConfirm}
   <div class="modal-overlay">
     <div class="modal">
@@ -562,6 +1133,47 @@
     font-size: 0.9rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+  .anchorpoint-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .anchorpoint-selector label {
+    font-weight: bold;
+    color: #333;
+    font-size: 0.9rem;
+  }
+  
+  .anchorpoint-selector select {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    background: white;
+  }
+  
+  .anchorpoint-selector select:focus {
+    outline: none;
+    border-color: #007acc;
+    box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+  }
+  
+  .anchorpoint-info {
+    font-size: 0.8rem;
+    color: #666;
+    line-height: 1.4;
+    padding: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+  }
+  
+  .anchorpoint-info strong {
+    display: block;
+    margin-top: 0.25rem;
+    color: #007acc;
   }
   .reset-button {
     width: 100%;
@@ -687,17 +1299,6 @@
     font-weight: bold;
     margin-top: 0.25rem;
   }
-  .validation-info {
-    font-size: 0.75rem;
-    color: #666;
-    margin-top: 0.25rem;
-  }
-  .validation-info code {
-    background: #f8f9fa;
-    padding: 2px 4px;
-    border-radius: 2px;
-    font-family: monospace;
-  }
   .validation-summary {
     background: #f8f9fa;
     border: 1px solid #ddd;
@@ -741,7 +1342,7 @@
     padding: 2rem;
   }
   .validation-form {
-    background: #f8f9fa;
+    background: #ffffff;
     padding: 1rem;
     border-radius: 6px;
   }
@@ -758,6 +1359,98 @@
     color: #555;
     font-size: 0.9rem;
   }
+  .regex-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .regex-icon {
+    font-size: 1rem;
+  }
+  .regex-icon.input {
+    color: #1976d2;
+  }
+  .regex-icon.output {
+    color: #7b1fa2;
+  }
+  .regex-badge {
+    background: #007acc;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: normal;
+    margin-left: 0.5rem;
+  }
+  .regex-input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-family: 'Courier New', monospace;
+  }
+  .regex-input:focus {
+    outline: none;
+    border-color: #007acc;
+    box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+  }
+  .regex-hint {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.25rem;
+    font-style: italic;
+  }
+  .current-regex-info {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: #ffffff;
+    border: 1px solid #b3d9ff;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  .current-regex-info strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #004085;
+  }
+  .regex-display {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+    padding: 0.25rem;
+  }
+  .regex-display.input {
+    color: #1976d2;
+  }
+  .regex-display.output {
+    color: #7b1fa2;
+  }
+  .regex-display code {
+    background: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    border: 1px solid #ddd;
+  }
+  .regex-display.input{
+    border: none !important;
+    background: white !important;
+    box-shadow: none !important;
+    pointer-events: none;
+  }
+  .no-regex-support {
+    text-align: center;
+    padding: 1rem;
+    color: #856404;
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  
   .form-group select,
   .form-group input {
     width: 100%;
