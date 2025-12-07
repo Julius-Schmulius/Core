@@ -187,7 +187,7 @@
       },
       globalSettings: {
         interaction_mode: node.data.interactionMode || currentInteractionMode,
-        anchorpoint: node.data.anchorpoint || '',
+        anchorpoint: String(node.data.anchorpoint || '').replace(/^\$\.?/, ''),
         globalsetting: []
       },
       mode: {
@@ -262,9 +262,9 @@
             if (targetNode.data.jsonPath) {
               jsonPath = String(targetNode.data.jsonPath);
             } else if (targetNode.data.path) {
-              jsonPath = `$.${targetNode.data.path}`;
+              jsonPath = String(targetNode.data.path);
             } else if (targetNode.data.label) {
-              jsonPath = `$.${targetNode.data.label}`;
+              jsonPath = String(targetNode.data.label);
             }
             
             const variableData: any = {
@@ -367,7 +367,7 @@
       let path = nodeId.replace('schema-', '');
       path = path.replace(/^(leaf|section)-/, '');
       path = path.replace(/-/g, '.');
-      return `$.${path}`;
+      return path;
     }
     return '$';
   }
@@ -679,7 +679,7 @@
   // find schema node by JSONPath for edge creation
   function findSchemaNodeByJsonPath(jsonPath: string, allNodes: Node[]): Node | null {
     // remove leading "$."
-    const cleanPath = jsonPath.replace(/^\$\./, '');
+    const cleanPath = jsonPath.replace(/^\$\.?/, '');
     
     const directMatch = allNodes.find(n => 
       n.type === 'leafNode' && n.data?.path === cleanPath
@@ -928,7 +928,7 @@
           componentVariables: modeVariables,
           edges: [],
           version: version || nodeVersion,
-          anchorpoint: component.globalSettings?.anchorpoint || ''
+          anchorpoint: (component.globalSettings?.anchorpoint || '').replace(/^\$\.?/, '')
         },
         position: position,
         style: `width: ${nodeWidth}px; height: ${nodeHeight}px;`,
@@ -1039,7 +1039,7 @@
 
   // sets is_visible for a component variable based on leaf path
   function updateComponentVariableVisibility(componentId: string, leafPath: string, isVisible: boolean) {
-    const jsonPath = `$.${leafPath}`;
+    const jsonPath = leafPath;
     const currentConfig = getCurrentConfig();
     // filter any component by id
     const componentIndex = currentConfig.components.findIndex(
@@ -1680,7 +1680,7 @@
 
     // special logic for leaf -> node connections (to set JSONPath & visibility)
     if (sourceNode?.type === 'nodeWithItems' && targetNode?.type === 'leafNode') {
-      const targetJsonPath = targetNode.data?.path ? `$.${targetNode.data.path}` : '';
+      const targetJsonPath = targetNode.data?.path || '';
       const isVisible = initialDirection.leftDirection && !initialDirection.rightDirection;
 
       const existingLeafConnections = currentEdges.filter(edge => {
@@ -1803,7 +1803,7 @@
         const parts = (params.sourceHandle || '').split('-');
         const varName = parts.length >= 3 ? parts[parts.length - 2] : '';
         const vIdx = varsArr.findIndex((v: any) => v.target_variable === varName);
-        const jsonPath = targetNode.data?.path ? `$.${targetNode.data.path}` : '';
+        const jsonPath = targetNode.data?.path || '';
         
         // update variable data with new edge info
         if (vIdx >= 0 && jsonPath) {
