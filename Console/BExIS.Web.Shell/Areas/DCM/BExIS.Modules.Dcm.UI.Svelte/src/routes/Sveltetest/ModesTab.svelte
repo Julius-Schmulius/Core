@@ -44,10 +44,26 @@
     return [];
   }
 
+  let showSubmodeWarning = false;
+
   function applyChanges() {
+    if (tempSelectedMode && hasChanges()) {
+      showSubmodeWarning = true;
+    } else if (tempSelectedMode) {
+      onModeChange(tempSelectedMode);
+    }
+  }
+
+  function confirmSubmodeChange() {
     if (tempSelectedMode) {
       onModeChange(tempSelectedMode);
     }
+    showSubmodeWarning = false;
+  }
+
+  function cancelSubmodeChange() {
+    showSubmodeWarning = false;
+    tempSelectedMode = nodeMode; // reset to current
   }
 
   function hasChanges(): boolean {
@@ -110,6 +126,28 @@
       </div>
     {/if}
   </div>
+
+  {#if showSubmodeWarning}
+    <div class="modal-overlay">
+      <div class="modal">
+        <h3>Mode Change Warning</h3>
+        <div class="modal-text">
+          You are about to change the mode for this component. This will:
+          <div class="modal-list">
+            <div class="modal-list-item">• Remove all existing connections for this component</div>
+            <div class="modal-list-item">• Reset all configurations and settings to their default values</div>
+          </div>
+          <div class="modal-strong">
+            This action cannot be undone. Do you want to continue?
+          </div>
+        </div>
+        <div class="modal-buttons">
+          <button class="cancel-button" on:click={cancelSubmodeChange}>Cancel</button>
+          <button class="confirm-button" on:click={confirmSubmodeChange}>Yes, Change Mode</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -242,5 +280,81 @@
     border-radius: 4px;
     color: #856404;
     font-size: 0.85rem;
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  }
+  
+  .modal {
+    background: white;
+    border-radius: 8px;
+    padding: 2rem;
+    max-width: 550px;
+    width: 90%;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+  
+  .modal h3 {
+    margin: 0 0 1rem 0;
+    color: #333;
+  }
+  
+  .modal-text {
+    margin-bottom: 1rem;
+    color: #666;
+    line-height: 1.5;
+  }
+  .modal-list {
+    margin: 0.5rem 0 1rem 1.5rem;
+  }
+  .modal-list-item {
+    margin-bottom: 0.25rem;
+  }
+  .modal-strong {
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 1rem;
+  }
+  
+  .modal-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+  }
+  .cancel-button, .confirm-button {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.2s;
+  }
+  
+  .cancel-button {
+    background: #6c757d;
+    color: white;
+  }
+  
+  .cancel-button:hover {
+    background: #5a6268;
+  }
+  .confirm-button {
+    background: #dc3545;
+    color: white;
+  }
+  
+  .confirm-button:hover {
+    background: #c82333;
   }
 </style>
