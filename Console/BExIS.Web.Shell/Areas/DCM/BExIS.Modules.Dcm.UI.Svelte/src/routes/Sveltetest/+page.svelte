@@ -1900,15 +1900,17 @@
             hasValidConnection = true;
           } else {
             const inputConnections = connectedEdges.filter(edge => {
-              const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+              const isIncomingNormal = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+              const isIncomingReverse = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
               const hasRightArrow = edge.data?.rightDirection === true && edge.data?.leftDirection === false;
-              return isIncoming && hasRightArrow;
+              return (isIncomingNormal || isIncomingReverse) && hasRightArrow;
             });
             
             const outputConnections = connectedEdges.filter(edge => {
-              const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+              const isOutgoingNormal = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+              const isOutgoingReverse = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
               const hasLeftArrow = edge.data?.leftDirection === true && edge.data?.rightDirection === false;
-              return isOutgoing && hasLeftArrow;
+              return (isOutgoingNormal || isOutgoingReverse) && hasLeftArrow;
             });
             
             if (inputConnections.length > 0 && outputConnections.length > 0) {
@@ -1919,33 +1921,31 @@
         // check if input-only variable has valid input connection
         } else if (variable.is_input && !variable.is_output) {
           const inputConnections = connectedEdges.filter(edge => {
-            const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+            const isIncomingNormal = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+            const isIncomingReverse = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
             const hasRightArrow = edge.data?.rightDirection === true;
-            return isIncoming && hasRightArrow;
+            return (isIncomingNormal || isIncomingReverse) && hasRightArrow;
           });
           
           if (inputConnections.length > 0) {
             hasValidConnection = true;
-          } else {
-            // console.log(`- ${variable.target_variable} missing input connection`);
           }
         
           // check if output-only variable has valid output connection
         } else if (!variable.is_input && variable.is_output) {
           const outputConnections = connectedEdges.filter(edge => {
-            const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+            const isOutgoingNormal = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+            const isOutgoingReverse = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
             const hasLeftArrow = edge.data?.leftDirection === true;
-            return isOutgoing && hasLeftArrow;
+            return (isOutgoingNormal || isOutgoingReverse) && hasLeftArrow;
           });
           
           if (outputConnections.length > 0) {
             hasValidConnection = true;
-          } else {
-            // console.log(`- ${variable.target_variable} missing output connection`);
           }
         }
         
-        allItems[`${$selectedNode.id}-${variable.target_variable}`] = hasValidConnection; // store individual item status
+        allItems[`${$selectedNode.id}-${variable.target_variable}`] = hasValidConnection;
         if (hasValidConnection) {
           totalConnectedCount++;
         }
@@ -1984,15 +1984,17 @@
                 hasValidConnection = true;
               } else {
                 const inputConnections = connectedEdges.filter(edge => {
-                  const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+                  const isIncomingNormal = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+                  const isIncomingReverse = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
                   const hasRightArrow = edge.data?.rightDirection === true && edge.data?.leftDirection === false;
-                  return isIncoming && hasRightArrow;
+                  return (isIncomingNormal || isIncomingReverse) && hasRightArrow;
                 });
                 
                 const outputConnections = connectedEdges.filter(edge => {
-                  const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+                  const isOutgoingNormal = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+                  const isOutgoingReverse = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
                   const hasLeftArrow = edge.data?.leftDirection === true && edge.data?.rightDirection === false;
-                  return isOutgoing && hasLeftArrow;
+                  return (isOutgoingNormal || isOutgoingReverse) && hasLeftArrow;
                 });
                 
                 if (inputConnections.length > 0 && outputConnections.length > 0) {
@@ -2003,9 +2005,10 @@
               // check if input-only variable has valid input connection
             } else if (variable.is_input && !variable.is_output) {
               const inputConnections = connectedEdges.filter(edge => {
-                const isIncoming = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+                const isIncomingNormal = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
+                const isIncomingReverse = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
                 const hasRightArrow = edge.data?.rightDirection === true;
-                return isIncoming && hasRightArrow;
+                return (isIncomingNormal || isIncomingReverse) && hasRightArrow;
               });
               
               if (inputConnections.length > 0) {
@@ -2015,9 +2018,10 @@
               // check if output-only variable has valid output connection
             } else if (!variable.is_input && variable.is_output) {
               const outputConnections = connectedEdges.filter(edge => {
-                const isOutgoing = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+                const isOutgoingNormal = edge.sourceHandle === handleId && (edge.target.startsWith('schema-') || edge.target.startsWith('param-'));
+                const isOutgoingReverse = edge.targetHandle === handleId && (edge.source.startsWith('schema-') || edge.source.startsWith('param-'));
                 const hasLeftArrow = edge.data?.leftDirection === true;
-                return isOutgoing && hasLeftArrow;
+                return (isOutgoingNormal || isOutgoingReverse) && hasLeftArrow;
               });
               
               if (outputConnections.length > 0) {

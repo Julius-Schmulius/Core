@@ -111,7 +111,7 @@
       if (!leaf?.data?.path) return;
 
       // build jsonpath format and add to result
-      const jsonPath = `$.${leaf.data.path}`;
+      const jsonPath = leaf.data.path;
       if (!result.find(r => r.jsonPath === jsonPath)) {
         result.push({
           id: leaf.id,
