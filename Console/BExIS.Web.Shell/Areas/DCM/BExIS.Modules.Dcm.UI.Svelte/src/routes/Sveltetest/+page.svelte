@@ -754,7 +754,7 @@
                   ...n,
                   data: {
                     ...n.data,
-                    is_visible: variable.is_visible !== false,
+                    is_visible: n.data?.is_visible ?? (variable.is_visible !== false),
                     edges,
                     nodes,
                     activeInteractionMode: currentInteractionMode,
@@ -795,10 +795,13 @@
     if (sn.type === 'leafNode') {
       const existing = $nodes.find(n => n.id === sn.id);
       const mergedData = existing ? { ...sn.data, ...existing.data } : sn.data;
+      const preservedIsVisible = existing?.data?.is_visible ?? mergedData?.is_visible;
+      
       return {
         ...sn,
         data: {
           ...mergedData,
+          is_visible: preservedIsVisible,
           edges,
           nodes,
           activeInteractionMode: currentInteractionMode,
@@ -1134,12 +1137,15 @@
       const enhancedSchemaNodes = schemaNodes.map(sn => {
         if (sn.type === 'leafNode') {
           // check if node already exists in node array
-          const existing = allNodes.find(n => n.id === sn.id);
+          const existing = currentNodes.find(n => n.id === sn.id);
           const mergedData = existing ? { ...sn.data, ...existing.data } : sn.data;
+          const preservedIsVisible = existing?.data?.is_visible ?? mergedData?.is_visible;
+          
           return {
             ...sn,
             data: {
               ...mergedData,
+              is_visible: preservedIsVisible,
               edges,
               nodes,
               activeInteractionMode: currentInteractionMode,
@@ -1151,7 +1157,7 @@
         return sn;
       });
       allNodes.push(...enhancedSchemaNodes);
-    }
+}
     
     // create snapshot to detect changes, store update only if changed
     const newSnapshot = JSON.stringify(
@@ -1747,7 +1753,7 @@
               ...node,
               data: {
                 ...node.data,
-                is_visible: isVisible,
+                is_visible: node.data?.is_visible ?? isVisible,
                 edges,
                 nodes,
                 activeInteractionMode: currentInteractionMode,

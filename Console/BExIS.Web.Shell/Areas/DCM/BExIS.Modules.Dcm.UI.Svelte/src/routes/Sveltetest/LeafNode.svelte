@@ -32,7 +32,7 @@
   $: nodes = data?.nodes;
   $: onToggleVisibility = data?.onToggleVisibility;
   $: onSetAnchorpoint = data?.onSetAnchorpoint;
-  $: activeMode = data?.activeInteractionMode ?? data?.currentInteractionMode ?? null;
+  $: activeMode = data?.activeInteractionMode || null;
 
   // internal reactive snapshots for stores
   let unsubscribeEdges: (() => void) | null = null;
@@ -105,11 +105,11 @@
   $: isAnchorpoint = checkIfAnchorpoint(currentNodes);
   
   // check if is_visible property allows visibility
-  $: isVisible = isConnected ? (data?.is_visible !== false) : true; // default true
+  $: isVisible = data?.is_visible !== false;
 
   function checkIfAnchorpoint(nodesArr: any[]): boolean {
     if (!Array.isArray(nodesArr) || !activeMode) return false;
-    const jsonPath = data?.path ? `$.${data.path}` : '';
+    const jsonPath = data?.path || '';
     if (!jsonPath) return false;
     
     // check if any component node has this leaf node as anchorpoint in current mode
@@ -133,7 +133,7 @@
       return;
     }
 
-    const jsonPath = data?.path ? `$.${data.path}` : '';
+    const jsonPath = data?.path || '';
     if (!jsonPath) return;
 
     const handleId = `${id}-handle`;
