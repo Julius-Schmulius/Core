@@ -151,12 +151,14 @@
     const handleId = `${id}-${itemId}-handle`;
     const variable = (data?.componentVariables || []).find((v: any) => `${id}-${v.target_variable}-handle` === handleId) || _item;
     
-    if (!variable?.is_input) return true;
+    if (!variable.is_input) return true;
+    if (!variable) return true;
     if (!edgesArray || !Array.isArray(edgesArray) || edgesArray.length === 0) return true;
 
     const currentInteractionMode = data?.interactionMode;
+    const isInputOnly = variable.is_input && !variable.is_output;
 
-    // check if if input connection already exists in current interaction mode for this handle
+    // check if input connection already exists in current interaction mode for this handle
     const hasInputAlready = edgesArray.some((edge: any) => {
       const isOutgoingFromThisHandle = edge.sourceHandle === handleId;
       const isToSchema = edge.target?.startsWith('schema-') || edge.target?.startsWith('param-');
@@ -167,7 +169,7 @@
       return isOutgoingFromThisHandle && isToSchema && hasInputFlow && isSameMode;
     });
 
-    return !hasInputAlready;
+    return isInputOnly ? !hasInputAlready : true;
   }
 </script>
 

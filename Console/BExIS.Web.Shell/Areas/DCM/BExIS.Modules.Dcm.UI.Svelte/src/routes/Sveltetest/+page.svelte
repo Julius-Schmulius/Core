@@ -1464,7 +1464,13 @@
           
           // automatic bidirectionality
           if (variable.is_input && variable.is_output) {
-            return { leftDirection: true, rightDirection: true };
+            const currentEdges = get(edges);
+            const hasInputAlready = currentEdges.some(edge => {
+              const sameHandle = edge.sourceHandle === componentHandleId || edge.targetHandle === componentHandleId;
+              if (!sameHandle) return false;
+              return edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true);
+            });
+            return hasInputAlready ? { leftDirection: true, rightDirection: false } : { leftDirection: true, rightDirection: true };
           }
           // input-only
           if (variable.is_input && !variable.is_output) {
@@ -1625,9 +1631,14 @@
             return edgeSourceNodeMode === sourceNodeMode;
           });
           
+          // allow if variable is IN & OUT, but block for only IN
           if (existingInputConnections.length > 0) {
-            //console.log('target already has input connection, blocking');
-            return false;
+            const parts = (connection.sourceHandle || '').split('-');
+            const variableName = parts.length >= 3 ? parts[parts.length - 2] : '';
+            const variables = Array.isArray(sourceNode?.data?.componentVariables) ? sourceNode!.data.componentVariables : [];
+            const variable = variables.find((v: any) => v.target_variable === variableName);
+            const isInputOnly = variable?.is_input && !variable?.is_output;
+            return isInputOnly ? false : true;
           }
         }
       }
@@ -1669,7 +1680,13 @@
           });
 
           if (existingInputConnections.length > 0) {
-            return;
+            // allow IN & OUT variables to add more edges but as forced OUT-only, when input already exists
+            const parts = (params.sourceHandle || '').split('-');
+            const variableName = parts.length >= 3 ? parts[parts.length - 2] : '';
+            const variables = Array.isArray(sourceNode?.data?.componentVariables) ? sourceNode!.data.componentVariables : [];
+            const variable = variables.find((v: any) => v.target_variable === variableName);
+            const isInputOnly = variable?.is_input && !variable?.is_output;
+            if (isInputOnly) return; // block only input-only duplicates
           }
         }
       }

@@ -101,8 +101,15 @@
 
     // determine initial directions based on variable properties
     if (variable.is_input && variable.is_output) {
+      // if handle already has an IN -> force only OUT
+      const currentEdges = $edges || [];
+      const hasInputAlready = currentEdges.some(edge =>
+        edge.id !== id &&
+        (edge.sourceHandle === handleId || edge.targetHandle === handleId || edge.data?.sourceHandleId === handleId || edge.data?.targetHandleId === handleId) &&
+        (edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true))
+      );
       initLeft = true;
-      initRight = true;
+      initRight = hasInputAlready ? false : true;
     } else if (variable.is_input && !variable.is_output) {
       initLeft = false;
       initRight = true;
@@ -179,21 +186,19 @@
       };
     }
  
-    // both input & output = both buttons enabled, but check for existing bidirectional connections
+    // both input & output = allow more edges if input exists, but only OUT arrows
     if (variable.is_input && variable.is_output) {
       const currentEdges = $edges || [];
-      const otherInputEdges = currentEdges.filter(edge => 
+      const hasInputAlready = currentEdges.some(edge => 
         edge.id !== id &&
-        edge.targetHandle === handleId &&
-        (edge.data?.rightDirection === true ||
-          (edge.data?.leftDirection === true && edge.data?.rightDirection === true))
+        (edge.sourceHandle === handleId || edge.targetHandle === handleId || edge.data?.sourceHandleId === handleId || edge.data?.targetHandleId === handleId) &&
+        (edge.data?.rightDirection === true || (edge.data?.leftDirection === true && edge.data?.rightDirection === true))
       );
-      if (otherInputEdges.length > 0) {
+      if (hasInputAlready) {
         return { 
-          canChange: false, 
-          leftDisabled: true, 
-          rightDisabled: true,
-          forceLeftActive: true
+          canChange: true, 
+          leftDisabled: false, 
+          rightDisabled: true
         };
       }
       return { canChange: true, leftDisabled: false, rightDisabled: false };
@@ -204,7 +209,7 @@
 
   // reactive update arrow directions based on data changes
   $: {
-    if (isDirectionChangeable?.forceLeftActive) {
+    if (isDirectionChangeable?.rightDisabled) {
       leftDirection = true;
       rightDirection = false;
     } else if (isDirectionChangeable?.forceRightActive) {
