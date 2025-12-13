@@ -861,8 +861,9 @@
                 Default: {setting.default_value?.value ?? 'false'}
               </div>
             {:else}
-              <label class="setting-name">{setting.name || setting.target_variable}:</label>
+              <label class="setting-name" for={`global-text-${setting.target_variable}`}>{setting.name || setting.target_variable}:</label>
               <input 
+                id={`global-text-${setting.target_variable}`}
                 type="text" 
                 value={setting.value || ''} 
                 on:input={(e) => handleGlobalInputChange(setting, e)}
@@ -899,8 +900,9 @@
                 Default: {setting.default_value?.value ?? 'false'}
               </div>
             {:else}
-              <label class="setting-name">{setting.name || setting.target_variable}:</label>
+              <label class="setting-name" for={`setting-text-${setting.target_variable}`}>{setting.name || setting.target_variable}:</label>
               <input 
+                id={`setting-text-${setting.target_variable}`}
                 type="text" 
                 value={setting.value || ''} 
                 on:input={(e) => handleInputChange(setting, e)}
@@ -1170,11 +1172,7 @@
     border-radius: 4px;
   }
   
-  .anchorpoint-info strong {
-    display: block;
-    margin-top: 0.25rem;
-    color: #007acc;
-  }
+
   .reset-button {
     width: 100%;
     padding: 0.75rem;
@@ -1359,29 +1357,6 @@
     color: #555;
     font-size: 0.9rem;
   }
-  .regex-label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .regex-icon {
-    font-size: 1rem;
-  }
-  .regex-icon.input {
-    color: #1976d2;
-  }
-  .regex-icon.output {
-    color: #7b1fa2;
-  }
-  .regex-badge {
-    background: #007acc;
-    color: white;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 0.75rem;
-    font-weight: normal;
-    margin-left: 0.5rem;
-  }
   .regex-input {
     width: 100%;
     padding: 0.5rem;
@@ -1394,12 +1369,6 @@
     outline: none;
     border-color: #007acc;
     box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
-  }
-  .regex-hint {
-    font-size: 0.75rem;
-    color: #666;
-    margin-top: 0.25rem;
-    font-style: italic;
   }
   .current-regex-info {
     margin-top: 1rem;

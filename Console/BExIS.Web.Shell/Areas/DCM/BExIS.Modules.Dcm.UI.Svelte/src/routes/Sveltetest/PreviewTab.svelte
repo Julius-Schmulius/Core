@@ -85,28 +85,7 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
-  
-  .info-grid {
-    display: grid;
-    gap: 0.5rem;
-  }
-  
-  .info-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .info-label {
-    font-weight: bold;
-    color: #666;
-    min-width: 120px;
-  }
-  
-  .info-value {
-    color: #333;
-  }
-  
+
   .variables-list {
     display: flex;
     flex-direction: column;

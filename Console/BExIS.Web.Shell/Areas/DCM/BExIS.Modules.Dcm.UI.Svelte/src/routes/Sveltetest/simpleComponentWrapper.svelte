@@ -9,9 +9,6 @@
         CodeEditor
     } from '@bexis2/bexis2-core-ui';
     import { SlideToggle } from '@skeletonlabs/skeleton';
-
-    // import { getValueByPath, setValueByPath, updateMetadataStore } from '../utils';
-
     import SimpleComponent from './simpleComponent.svelte';
 
     export let simpleComponent: any;
@@ -24,9 +21,6 @@
             ? path.split('.')[path.split('.').length - 1]
             : path;
 
-    // let value = getValueByPath(path + '.#text');
-    // TODO FIX: works without set value but expects Value to be passed
-    // let value: any = undefined;
 </script>
 
 {#if path && simpleComponent.properties}

@@ -145,12 +145,6 @@
     font-size: 1.2rem;
   }
   
-  .components-section h4 {
-    margin: 0 0 1rem 0;
-    color: #555;
-    font-size: 1rem;
-  }
-  
   .component-card {
     background: white;
     border: 1px solid #ddd;
@@ -184,13 +178,6 @@
   
   .component-modes {
     margin-bottom: 1rem;
-  }
-  
-  .modes-count {
-    font-size: 0.8rem;
-    color: #666;
-    margin-bottom: 0.5rem;
-    font-weight: bold;
   }
   
   .modes-list {

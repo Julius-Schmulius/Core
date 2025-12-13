@@ -282,6 +282,10 @@
   function handlePopupClick(event: MouseEvent) {
     event.stopPropagation();
   }
+
+  function handlePopupKeydown(event: KeyboardEvent) {
+    event.stopPropagation();
+  }
 </script>
 
 <svelte:window on:click={handleClickOutside} />
@@ -302,7 +306,7 @@
       </button>
       
       {#if showPopup}
-        <div class="edge-popup" on:click={handlePopupClick}>
+        <div class="edge-popup" role="menu" tabindex="-1" on:click={handlePopupClick} on:keydown={handlePopupKeydown}>
           <div class="popup-row">
             <button class="delete-button" on:click={deleteEdge} title="delete edge">
                 <span class="trash-fallback">🗑️</span>

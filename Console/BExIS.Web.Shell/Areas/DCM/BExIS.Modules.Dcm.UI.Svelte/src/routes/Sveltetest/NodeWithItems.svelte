@@ -275,7 +275,7 @@
     font-size: 1rem;
     margin-bottom: 4px;
   }
-  .component-info, .mode-info {
+  .mode-info {
     margin-bottom: 2px;
     color: #666;
     font-size: 0.75rem;
@@ -355,15 +355,6 @@
     flex: 1;
     text-align: center;
     font-size: 0.85rem;
-  }
-  .item-type {
-    font-size: 0.7rem;
-    color: #888;
-    text-align: center;
-    margin-top: 4px;
-    background: #f8f9fa;
-    padding: 2px 4px;
-    border-radius: 2px;
   }
   .no-items {
     text-align: center;
