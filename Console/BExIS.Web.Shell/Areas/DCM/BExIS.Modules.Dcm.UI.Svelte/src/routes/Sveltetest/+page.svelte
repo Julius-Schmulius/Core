@@ -86,8 +86,8 @@
       const loaded = await loadConfigsFromDownloads();
       
       if (loaded) {
-        componentConfig_edit = loaded.edit;
-        componentConfig_view = loaded.view;
+        componentConfig_edit = JSON.parse(JSON.stringify(loaded.edit));
+        componentConfig_view = JSON.parse(JSON.stringify(loaded.view));
         componentPositions = loaded.positions;
         
         editModeNodes = [];
@@ -267,13 +267,17 @@
               jsonPath = String(targetNode.data.label);
             }
             
+            // prioritize interaction-mode specific visibility to prevent overwriting inactive mode settings with active mode state
+            // uses key to store visibility per mode
+            const modeVisibilityKey = `is_visible_${modeKey}`;
+            const isVisible = targetNode.data[modeVisibilityKey] !== undefined ? targetNode.data[modeVisibilityKey] : (targetNode.data.is_visible !== false);
             const variableData: any = {
               target_variable: variable.target_variable,
               is_input: connectedEdge.data?.rightDirection || false,
               is_output: connectedEdge.data?.leftDirection || false,
               type: variable.type,
               JSONPath: jsonPath,
-              is_visible: targetNode.data.is_visible !== false
+              is_visible: isVisible
             };
 
             // transfer regex from existingVariables
@@ -748,22 +752,27 @@
           }
 
           // update leafnode connected to this variable and set visibility from config
-          nodes.update(ns => ns.map(n =>
-            n.id === schemaNode.id && n.type === 'leafNode'
-              ? {
+          nodes.update(ns => ns.map(n => {
+            if (n.id === schemaNode.id && n.type === 'leafNode') {
+              const modeVisibilityKey = `is_visible_${mode}`;
+              const finalVisibility = variable.is_visible !== false;
+
+              return {
                   ...n,
                   data: {
                     ...n.data,
-                    is_visible: n.data?.is_visible ?? (variable.is_visible !== false),
+                    [modeVisibilityKey]: finalVisibility, // store per mode via key
+                    is_visible: finalVisibility,
                     edges,
                     nodes,
                     activeInteractionMode: currentInteractionMode,
                     onToggleVisibility: handleToggleLeafVisibility,
                     onSetAnchorpoint: handleSetAnchorpoint
                   }
-                }
-              : n
-          ));
+                };
+              }
+              return n;
+          }));
         });
       });
 
@@ -790,7 +799,7 @@
     }, 50);
   }
 
-  // merge schema nodes with existing UI state, preserves user changes (visibility toggle...)
+  // merge schema nodes with existing UI state, preserves user changes (visibility toggle...) (NOT USED)
   const enhancedSchemaNodes = schemaNodes.map(sn => {
     if (sn.type === 'leafNode') {
       const existing = $nodes.find(n => n.id === sn.id);
@@ -954,11 +963,13 @@
     nodes.update(allNodes => allNodes.map(node => {
       if (node.id === leafNodeId && node.type === 'leafNode') {
         const newIsVisible = !(node.data?.is_visible !== false);
+        const modeVisibilityKey = `is_visible_${currentInteractionMode}`;
         const updatedNode = {
           ...node,
           data: {
             ...node.data,
-            is_visible: newIsVisible, // new visibility state
+            [modeVisibilityKey]: newIsVisible, // store per mode via key
+            is_visible: newIsVisible,
             edges,
             nodes,
             onToggleVisibility: handleToggleLeafVisibility,
@@ -974,7 +985,7 @@
 
         // update for each connected component variable visibility
         connectedEdges.forEach((edge: any) => {
-          const componentId = edge.source.startsWith('config-component-') ? edge.source : edge.target;
+          const componentId = edge.source === leafNodeId ? edge.target : edge.source;
           const nodePath = node.data?.path;
           if (typeof nodePath === 'string') {
             updateComponentVariableVisibility(componentId, nodePath, newIsVisible);
@@ -1051,11 +1062,17 @@
 
     if (componentIndex >= 0) {
       const vars = currentConfig.components[componentIndex].mode?.variables?.variable || []; // all component variables
-      const vi = vars.findIndex((v: any) => v.JSONPath === jsonPath); // variable with matching jsonpath
+      
+      // update all variables with matching jsonpath
+      let updated = false;
+      vars.forEach((v: any) => {
+        if (v.JSONPath === jsonPath) {
+          v.is_visible = isVisible;
+          updated = true;
+        }
+      });
 
-      // update visibility if variable found
-      if (vi >= 0) {
-        vars[vi].is_visible = isVisible; // new visibility state
+      if (updated) {
         if (currentInteractionMode === 'edit') {
           componentConfig_edit = { ...componentConfig_edit };
         } else {
@@ -1138,14 +1155,16 @@
         if (sn.type === 'leafNode') {
           // check if node already exists in node array
           const existing = currentNodes.find(n => n.id === sn.id);
-          const mergedData = existing ? { ...sn.data, ...existing.data } : sn.data;
-          const preservedIsVisible = existing?.data?.is_visible ?? mergedData?.is_visible;
+          const modeVisibilityKey = `is_visible_${currentInteractionMode}`;
+          const preservedModeVisibility = existing?.data?.[modeVisibilityKey];
           
           return {
             ...sn,
             data: {
-              ...mergedData,
-              is_visible: preservedIsVisible,
+              // preserve existing data to maintain state such as visibility per mode
+              ...(existing ? existing.data : sn.data),
+              [modeVisibilityKey]: preservedModeVisibility !== undefined ? preservedModeVisibility : sn.data?.is_visible,
+              is_visible: preservedModeVisibility !== undefined ? preservedModeVisibility : sn.data?.is_visible,
               edges,
               nodes,
               activeInteractionMode: currentInteractionMode,
